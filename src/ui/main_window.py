@@ -1,0 +1,282 @@
+"""
+主窗口
+"""
+import logging
+from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+                             QPushButton, QStackedWidget, QMessageBox)
+from PyQt5.QtCore import Qt, QThread, pyqtSignal
+from ..database import Database
+from ..api_clients import ShortLineTVClient, ReelShortClient
+from ..download_manager import DownloadManager
+from ..config import config
+from .new_task_widget import NewTaskWidget
+from .task_progress_widget import TaskProgressWidget
+
+# 配置日志
+logging.basicConfig(
+    level=getattr(logging, config.LOG_LEVEL),
+    format=config.LOG_FORMAT
+)
+logger = logging.getLogger(__name__)
+
+
+class TaskCreationThread(QThread):
+    """任务创建线程，用于异步获取剧集信息"""
+    
+    finished = pyqtSignal(bool, str, list)  # 完成信号: (success, message, episodes)
+    
+    def __init__(self, task_data: dict):
+        super().__init__()
+        self.task_data = task_data
+    
+    def run(self):
+        """执行任务创建"""
+        try:
+            source = self.task_data['source']
+            drama_url = self.task_data['drama_url']
+            start_episode = self.task_data['start_episode']
+            end_episode = self.task_data['end_episode']
+            
+            if source == 'shortlinetv':
+                client = ShortLineTVClient()
+                video_id = client.extract_video_id(drama_url)
+                if not video_id:
+                    self.finished.emit(False, "无法从URL中提取video_id", [])
+                    return
+                
+                api_data = client.get_episodes(video_id)
+                episodes = client.parse_episodes(api_data, start_episode, end_episode)
+            
+            elif source == 'reelshort':
+                client = ReelShortClient()
+                slug = client.extract_slug(drama_url)
+                if not slug:
+                    self.finished.emit(False, "无法从URL中提取slug", [])
+                    return
+                
+                api_data = client.get_movie_data(slug)
+                episodes = client.parse_episodes(api_data, slug, start_episode, end_episode)
+            
+            else:
+                self.finished.emit(False, f"未知的来源: {source}", [])
+                return
+            
+            if not episodes:
+                self.finished.emit(False, "未找到可下载的剧集", [])
+                return
+            
+            self.finished.emit(True, f"成功获取 {len(episodes)} 个剧集", episodes)
+        
+        except Exception as e:
+            logger.error(f"创建任务时出错: {e}")
+            self.finished.emit(False, f"创建任务失败: {str(e)}", [])
+
+
+class MainWindow(QMainWindow):
+    """主窗口"""
+    
+    def __init__(self):
+        super().__init__()
+        self.db = Database()
+        self.download_manager = None
+        self.task_creation_thread = None
+        self.init_ui()
+        self.init_download_manager()
+    
+    def init_ui(self):
+        """初始化UI"""
+        self.setWindowTitle("短剧下载器")
+        self.setGeometry(
+            config.WINDOW_X, 
+            config.WINDOW_Y, 
+            config.WINDOW_WIDTH, 
+            config.WINDOW_HEIGHT
+        )
+        
+        # 中央部件
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+        
+        # 主布局
+        main_layout = QVBoxLayout()
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
+        
+        # 顶部按钮栏
+        button_layout = QHBoxLayout()
+        button_layout.setContentsMargins(10, 10, 10, 10)
+        button_layout.setSpacing(10)
+        
+        self.new_task_btn = QPushButton("新建任务")
+        self.new_task_btn.setCheckable(True)
+        self.new_task_btn.setChecked(True)
+        self.new_task_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #2196F3;
+                color: white;
+                border: none;
+                padding: 10px 20px;
+                border-radius: 4px;
+                font-size: 14px;
+                font-weight: bold;
+            }
+            QPushButton:checked {
+                background-color: #1976D2;
+            }
+            QPushButton:hover {
+                background-color: #42A5F5;
+            }
+        """)
+        self.new_task_btn.clicked.connect(lambda: self.switch_page(0))
+        
+        self.progress_btn = QPushButton("任务进度")
+        self.progress_btn.setCheckable(True)
+        self.progress_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #2196F3;
+                color: white;
+                border: none;
+                padding: 10px 20px;
+                border-radius: 4px;
+                font-size: 14px;
+                font-weight: bold;
+            }
+            QPushButton:checked {
+                background-color: #1976D2;
+            }
+            QPushButton:hover {
+                background-color: #42A5F5;
+            }
+        """)
+        self.progress_btn.clicked.connect(lambda: self.switch_page(1))
+        
+        button_layout.addWidget(self.new_task_btn)
+        button_layout.addWidget(self.progress_btn)
+        button_layout.addStretch()
+        
+        main_layout.addLayout(button_layout)
+        
+        # 页面堆叠
+        self.stacked_widget = QStackedWidget()
+        
+        # 新建任务页面
+        self.new_task_widget = NewTaskWidget()
+        self.new_task_widget.task_created.connect(self.on_task_created)
+        self.stacked_widget.addWidget(self.new_task_widget)
+        
+        # 任务进度页面
+        self.progress_widget = TaskProgressWidget(self.db)
+        self.stacked_widget.addWidget(self.progress_widget)
+        
+        main_layout.addWidget(self.stacked_widget)
+        
+        central_widget.setLayout(main_layout)
+        
+        # 设置样式
+        self.setStyleSheet("""
+            QMainWindow {
+                background-color: #f5f5f5;
+            }
+            QWidget {
+                font-family: "Microsoft YaHei", "SimHei", Arial;
+                font-size: 12px;
+            }
+        """)
+    
+    def init_download_manager(self):
+        """初始化下载管理器"""
+        def progress_callback(episode_id, progress, status, error_msg=None):
+            """进度回调"""
+            # 进度更新会通过数据库刷新自动显示
+            pass
+        
+        self.download_manager = DownloadManager(
+            self.db,
+            max_concurrent=config.MAX_CONCURRENT_DOWNLOADS,
+            progress_callback=progress_callback
+        )
+        self.download_manager.start()
+    
+    def switch_page(self, index: int):
+        """切换页面"""
+        self.stacked_widget.setCurrentIndex(index)
+        if index == 0:
+            self.new_task_btn.setChecked(True)
+            self.progress_btn.setChecked(False)
+        else:
+            self.new_task_btn.setChecked(False)
+            self.progress_btn.setChecked(True)
+    
+    def on_task_created(self, task_data: dict):
+        """处理任务创建"""
+        # 显示加载提示
+        QMessageBox.information(
+            self,
+            "提示",
+            "正在获取剧集信息，请稍候..."
+        )
+        
+        # 创建任务创建线程
+        self.task_creation_thread = TaskCreationThread(task_data)
+        self.task_creation_thread.finished.connect(
+            lambda success, msg, episodes: self.on_task_creation_finished(
+                success, msg, episodes, task_data
+            )
+        )
+        self.task_creation_thread.start()
+    
+    def on_task_creation_finished(self, success: bool, message: str, 
+                                  episodes: list, task_data: dict):
+        """任务创建完成回调"""
+        if not success:
+            QMessageBox.critical(self, "错误", message)
+            return
+        
+        try:
+            # 创建任务记录
+            task_id = self.db.create_task(
+                task_name=task_data['task_name'],
+                source=task_data['source'],
+                drama_name=task_data['drama_name'],
+                drama_url=task_data['drama_url'],
+                start_episode=task_data['start_episode'],
+                end_episode=task_data['end_episode'],
+                storage_path=task_data['storage_path']
+            )
+            
+            # 添加剧集
+            self.db.add_episodes(task_id, episodes)
+            
+            # 将剧集添加到下载队列
+            task_episodes = self.db.get_task_episodes(task_id)
+            for episode in episodes:
+                # 通过数据库查询获取episode_id
+                for ep in task_episodes:
+                    if (ep['episode_num'] == episode['episode_num'] and 
+                        ep['episode_url'] == episode['episode_url']):
+                        self.download_manager.add_episode(ep['id'])
+                        break
+            
+            QMessageBox.information(
+                self,
+                "成功",
+                f"{message}\n任务已创建并开始下载！"
+            )
+            
+            # 切换到任务进度页面
+            self.switch_page(1)
+        
+        except Exception as e:
+            logger.error(f"保存任务时出错: {e}")
+            QMessageBox.critical(
+                self,
+                "错误",
+                f"保存任务失败: {str(e)}"
+            )
+    
+    def closeEvent(self, event):
+        """窗口关闭事件"""
+        if self.download_manager:
+            self.download_manager.stop()
+        event.accept()
+
