@@ -135,21 +135,20 @@ class DownloadManager:
     
     def _download_episode(self, episode_id: int):
         """下载单个剧集"""
+        episode = self.db.get_episode_by_id(episode_id)
+        if not episode:
+            return
+        
+        # 检查是否已删除
+        if episode['status'] == 'deleted':
+            with self.lock:
+                self.processing_episodes.discard(episode_id)
+            return
+        
+        # 更新状态为下载中
+        self.db.update_episode_status(episode_id, 'downloading', 0.0)
+        
         try:
-            episode = self.db.get_episode_by_id(episode_id)
-            if not episode:
-                return
-            
-            # 检查是否已删除
-            if episode['status'] == 'deleted':
-                with self.lock:
-                    self.processing_episodes.discard(episode_id)
-                return
-            
-            # 更新状态为下载中
-            self.db.update_episode_status(episode_id, 'downloading', 0.0)
-            
-            try:
             # 获取任务信息以确定存储路径
             task_episodes = self.db.get_task_episodes(episode['task_id'])
             task_info = None
@@ -246,10 +245,10 @@ class DownloadManager:
             else:
                 logger.warning(f"剧集 {episode_id} 下载完成，但无法找到文件")
             
-                with self.lock:
-                    self.processing_episodes.discard(episode_id)
-            
-            except Exception as e:
+            with self.lock:
+                self.processing_episodes.discard(episode_id)
+        
+        except Exception as e:
             error_msg = str(e)
             logger.error(f"下载剧集 {episode_id} 失败: {error_msg}")
             self.db.update_episode_status(episode_id, 'error', 0.0, error_msg)
@@ -257,6 +256,6 @@ class DownloadManager:
             if self.progress_callback:
                 self.progress_callback(episode_id, 0.0, 'error', error_msg)
             
-                with self.lock:
-                    self.processing_episodes.discard(episode_id)
+            with self.lock:
+                self.processing_episodes.discard(episode_id)
 
