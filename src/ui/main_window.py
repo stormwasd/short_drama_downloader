@@ -7,12 +7,22 @@ from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QPushButton, QStackedWidget, QMessageBox, QApplication)
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from pathlib import Path
-from ..database import Database
-from ..api_clients import ShortLineTVClient, ReelShortClient
-from ..download_manager import DownloadManager
-from ..config import config
-from .new_task_widget import NewTaskWidget
-from .task_progress_widget import TaskProgressWidget
+# 使用绝对导入，兼容打包后的exe
+try:
+    from src.database import Database
+    from src.api_clients import ShortLineTVClient, ReelShortClient
+    from src.download_manager import DownloadManager
+    from src.config import config
+    from src.ui.new_task_widget import NewTaskWidget
+    from src.ui.task_progress_widget import TaskProgressWidget
+except ImportError:
+    # 如果绝对导入失败，使用相对导入（开发模式）
+    from ..database import Database
+    from ..api_clients import ShortLineTVClient, ReelShortClient
+    from ..download_manager import DownloadManager
+    from ..config import config
+    from .new_task_widget import NewTaskWidget
+    from .task_progress_widget import TaskProgressWidget
 
 # 配置日志
 logging.basicConfig(
@@ -103,11 +113,21 @@ class MainWindow(QMainWindow):
         try:
             from PyQt5.QtGui import QIcon
             # 尝试多个可能的路径
-            possible_paths = [
-                Path(__file__).parent.parent.parent / "resources" / "icon.ico",
-                Path.cwd() / "resources" / "icon.ico",
-                Path(sys.executable).parent / "resources" / "icon.ico",  # 打包后的路径
-            ]
+            # 打包后的exe，资源文件在临时目录中
+            if getattr(sys, 'frozen', False):
+                # 打包后的路径
+                base_path = Path(sys.executable).parent
+                possible_paths = [
+                    base_path / "resources" / "icon.ico",  # 打包后的资源路径
+                    Path(sys._MEIPASS) / "resources" / "icon.ico" if hasattr(sys, '_MEIPASS') else None,  # PyInstaller临时目录
+                ]
+                possible_paths = [p for p in possible_paths if p is not None]
+            else:
+                # 开发模式
+                possible_paths = [
+                    Path(__file__).parent.parent.parent / "resources" / "icon.ico",
+                    Path.cwd() / "resources" / "icon.ico",
+                ]
             for icon_path in possible_paths:
                 if icon_path.exists():
                     self.setWindowIcon(QIcon(str(icon_path)))

@@ -7,7 +7,11 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QFont
 from pathlib import Path
-from ..config import config
+# 使用绝对导入，兼容打包后的exe
+try:
+    from src.config import config
+except ImportError:
+    from ..config import config
 
 
 class NewTaskWidget(QWidget):

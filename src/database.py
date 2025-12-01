@@ -7,7 +7,11 @@ import sys
 from typing import List, Dict, Optional
 from datetime import datetime
 from pathlib import Path
-from .config import config
+# 使用绝对导入，兼容打包后的exe
+try:
+    from src.config import config
+except ImportError:
+    from .config import config
 
 
 def get_app_data_dir():

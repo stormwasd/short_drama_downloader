@@ -9,8 +9,13 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                              QCheckBox, QHeaderView, QMessageBox, QTabWidget)
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QFont
-from ..database import Database
-from ..config import config
+# 使用绝对导入，兼容打包后的exe
+try:
+    from src.database import Database
+    from src.config import config
+except ImportError:
+    from ..database import Database
+    from ..config import config
 
 logger = logging.getLogger(__name__)
 

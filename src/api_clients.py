@@ -5,7 +5,11 @@ import re
 import requests
 from typing import List, Dict, Optional
 import logging
-from .config import config
+# 使用绝对导入，兼容打包后的exe
+try:
+    from src.config import config
+except ImportError:
+    from .config import config
 
 logger = logging.getLogger(__name__)
 

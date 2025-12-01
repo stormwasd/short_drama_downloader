@@ -8,8 +8,13 @@ import logging
 from typing import Callable, Optional
 from pathlib import Path
 import yt_dlp
-from .database import Database
-from .config import config
+# 使用绝对导入，兼容打包后的exe
+try:
+    from src.database import Database
+    from src.config import config
+except ImportError:
+    from .database import Database
+    from .config import config
 
 logger = logging.getLogger(__name__)
 
