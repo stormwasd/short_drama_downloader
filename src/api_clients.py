@@ -79,8 +79,14 @@ class ShortLineTVClient:
             logger.error(f"请求shortlinetv API失败: {e}")
             raise Exception(f"获取剧集信息失败: {str(e)}")
     
-    def parse_episodes(self, api_data: Dict, start_episode: int, end_episode: int) -> List[Dict]:
-        """解析剧集数据，返回指定区间的剧集列表"""
+    def parse_episodes(self, api_data: Dict, start_episode: int, end_episode: int, is_default_range: bool = False) -> List[Dict]:
+        """解析剧集数据，返回指定区间的剧集列表
+        
+        注意：shortlinetv的episode_num从1开始
+        - 如果is_default_range=True且start_episode=1且end_episode=0：下载所有剧集
+        - 如果用户手动选择1-1：只下载第1集
+        - 如果用户选择1-5：下载第1到第5集
+        """
         episodes = []
         
         if "list" not in api_data or "episode_list" not in api_data["list"]:
@@ -93,9 +99,19 @@ class ShortLineTVClient:
         for episode in episode_list:
             episode_num = episode.get("episode_num", 0)
             
-            # 如果指定了区间，只取区间内的
-            if start_episode > 0 or end_episode > 0:
-                if episode_num < start_episode or (end_episode > 0 and episode_num > end_episode):
+            # 判断是否下载所有剧集：只有默认值（start=1, end=0）且is_default_range=True时才下载所有
+            if is_default_range and start_episode == 1 and end_episode == 0:
+                # 下载所有剧集，不进行过滤
+                pass
+            elif start_episode == end_episode and start_episode > 0:
+                # 下载指定的一集
+                if episode_num != start_episode:
+                    continue
+            else:
+                # 下载指定区间
+                if start_episode > 0 and episode_num < start_episode:
+                    continue
+                if end_episode > 0 and episode_num > end_episode:
                     continue
             
             if "url" in episode:
@@ -191,8 +207,15 @@ class ReelShortClient:
             logger.error(f"请求reelshort API失败: {e}")
             raise Exception(f"获取剧集信息失败: {str(e)}")
     
-    def parse_episodes(self, api_data: Dict, slug: str, start_episode: int, end_episode: int) -> List[Dict]:
-        """解析剧集数据，返回指定区间的剧集列表"""
+    def parse_episodes(self, api_data: Dict, slug: str, start_episode: int, end_episode: int, is_default_range: bool = False) -> List[Dict]:
+        """解析剧集数据，返回指定区间的剧集列表
+        
+        注意：reelshort的serial_number从0开始，episode_num也对应从0开始
+        - 如果is_default_range=True且start_episode=0且end_episode=0：下载所有剧集
+        - 如果用户手动选择0-0：只下载第0集
+        - 如果用户选择1-1：只下载第1集
+        - 如果用户选择0-5：下载第0到第5集
+        """
         episodes = []
         
         if "online_base" not in api_data:
@@ -201,37 +224,56 @@ class ReelShortClient:
         drama_name = api_data.get("book_title", "未知剧集")
         online_base = api_data["online_base"]
         
-        # 过滤指定区间的剧集（注意：serial_number从0开始，但episode_num从1开始）
+        # reelshort的serial_number从0开始，episode_num也对应从0开始
+        # 对于第0集，可能需要特殊处理（可能是trailer，chapter_type可能不是1）
+        # 对于其他剧集，只处理正常剧集（chapter_type == 1），跳过预告片等（chapter_type == 2）
         for item in online_base:
             serial_number = item.get("serial_number", 0)
             chapter_id = item.get("chapter_id", "")
             chapter_type = item.get("chapter_type", 1)
             
-            # 只处理正常剧集（chapter_type == 1），跳过预告片等（chapter_type == 2）
-            if chapter_type != 1:
-                continue
-            
-            # serial_number从0开始，但根据实际数据：
-            # serial_number=0是预告片（chapter_type=2），跳过
-            # serial_number=1对应episode-1，serial_number=2对应episode-2
-            # 所以episode_num = serial_number（serial_number>=1才是正片）
+            # reelshort的episode_num = serial_number（从0开始）
             episode_num = serial_number
             
-            # 如果serial_number=0，说明是预告片，应该跳过（但上面已经通过chapter_type过滤了）
-            if episode_num < 1:
+            # 特殊处理：如果用户明确选择第0集，即使chapter_type不是1也要包含
+            # 否则，只处理正常剧集（chapter_type == 1）
+            is_target_episode_0 = (start_episode == 0 and end_episode == 0 and not is_default_range)
+            if not is_target_episode_0 and chapter_type != 1:
                 continue
             
-            # 如果指定了区间，只取区间内的
-            if start_episode > 0 or end_episode > 0:
-                if episode_num < start_episode or (end_episode > 0 and episode_num > end_episode):
+            # 判断是否下载所有剧集：只有默认值（两个都是0）且is_default_range=True时才下载所有
+            if is_default_range and start_episode == 0 and end_episode == 0:
+                # 下载所有剧集，但只包含正常剧集（chapter_type == 1）
+                if chapter_type != 1:
+                    continue
+            elif start_episode == end_episode:
+                # 下载指定的一集（包括第0集）
+                # 用户手动选择0-0时，只下载第0集（允许chapter_type不是1）
+                if episode_num != start_episode:
+                    continue
+            else:
+                # 下载指定区间
+                if episode_num < start_episode:
+                    continue
+                if end_episode > 0 and episode_num > end_episode:
+                    continue
+                # 对于区间下载，只包含正常剧集
+                if chapter_type != 1:
                     continue
             
             # 构建episode URL
             # 格式: https://www.reelshort.com/episodes/episode-{episode_num}-{slug}-{chapter_id}
-            episode_url = f"{self.BASE_URL}/episodes/episode-{episode_num}-{slug}-{chapter_id}"
+            # 注意：URL中的episode_num需要+1，因为URL格式是episode-1, episode-2...
+            # 但第0集对应的是trailer或episode-0，需要特殊处理
+            if episode_num == 0:
+                # 第0集可能是trailer，URL格式可能不同，需要检查实际URL格式
+                # 根据用户提供的示例，第0集可能是trailer-xxx格式
+                episode_url = f"{self.BASE_URL}/episodes/trailer-{slug}-{chapter_id}"
+            else:
+                episode_url = f"{self.BASE_URL}/episodes/episode-{episode_num}-{slug}-{chapter_id}"
             
             episodes.append({
-                "episode_num": episode_num,
+                "episode_num": episode_num,  # 内部使用从0开始的编号
                 "episode_name": f"{drama_name} - Episode {episode_num}",
                 "episode_url": episode_url,
                 "download_url": episode_url  # reelshort直接使用episode_url作为下载URL

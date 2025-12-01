@@ -2,9 +2,11 @@
 主窗口
 """
 import logging
+import sys
 from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-                             QPushButton, QStackedWidget, QMessageBox)
+                             QPushButton, QStackedWidget, QMessageBox, QApplication)
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
+from pathlib import Path
 from ..database import Database
 from ..api_clients import ShortLineTVClient, ReelShortClient
 from ..download_manager import DownloadManager
@@ -45,7 +47,9 @@ class TaskCreationThread(QThread):
                     return
                 
                 api_data = client.get_episodes(video_id)
-                episodes = client.parse_episodes(api_data, start_episode, end_episode)
+                # 传递is_default_range参数
+                is_default_range = self.task_data.get('is_default_range', False)
+                episodes = client.parse_episodes(api_data, start_episode, end_episode, is_default_range)
             
             elif source == 'reelshort':
                 client = ReelShortClient()
@@ -55,7 +59,9 @@ class TaskCreationThread(QThread):
                     return
                 
                 api_data = client.get_movie_data(slug)
-                episodes = client.parse_episodes(api_data, slug, start_episode, end_episode)
+                # 传递is_default_range参数
+                is_default_range = self.task_data.get('is_default_range', False)
+                episodes = client.parse_episodes(api_data, slug, start_episode, end_episode, is_default_range)
             
             else:
                 self.finished.emit(False, f"未知的来源: {source}", [])
@@ -85,13 +91,30 @@ class MainWindow(QMainWindow):
     
     def init_ui(self):
         """初始化UI"""
-        self.setWindowTitle("短剧下载器")
+        self.setWindowTitle(f"短剧下载器 (v{config.VERSION})")
         self.setGeometry(
             config.WINDOW_X, 
             config.WINDOW_Y, 
             config.WINDOW_WIDTH, 
             config.WINDOW_HEIGHT
         )
+        
+        # 设置窗口图标（如果存在）
+        try:
+            from PyQt5.QtGui import QIcon
+            # 尝试多个可能的路径
+            possible_paths = [
+                Path(__file__).parent.parent.parent / "resources" / "icon.ico",
+                Path.cwd() / "resources" / "icon.ico",
+                Path(sys.executable).parent / "resources" / "icon.ico",  # 打包后的路径
+            ]
+            for icon_path in possible_paths:
+                if icon_path.exists():
+                    self.setWindowIcon(QIcon(str(icon_path)))
+                    logger.info(f"设置窗口图标: {icon_path}")
+                    break
+        except Exception as e:
+            logger.debug(f"设置窗口图标失败: {e}")
         
         # 中央部件
         central_widget = QWidget()
@@ -181,6 +204,19 @@ class MainWindow(QMainWindow):
                 font-family: "Microsoft YaHei", "SimHei", Arial;
                 font-size: 12px;
             }
+            QMessageBox {
+                /* 弹窗使用系统默认样式，不继承自定义样式 */
+                font-family: initial;
+                font-size: initial;
+            }
+            QMessageBox QLabel {
+                font-family: initial;
+                font-size: initial;
+            }
+            QMessageBox QPushButton {
+                font-family: initial;
+                font-size: initial;
+            }
         """)
     
     def init_download_manager(self):
@@ -209,27 +245,60 @@ class MainWindow(QMainWindow):
     
     def on_task_created(self, task_data: dict):
         """处理任务创建"""
+        # 检查任务名称是否重复
+        if self.db.task_name_exists(task_data['task_name']):
+            reply = QMessageBox.question(
+                self,
+                "任务名称重复",
+                f"任务名称 '{task_data['task_name']}' 已存在，是否继续创建？",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No
+            )
+            if reply == QMessageBox.No:
+                return
+        
         # 显示加载提示
-        QMessageBox.information(
-            self,
-            "提示",
-            "正在获取剧集信息，请稍候..."
-        )
+        loading_msg = QMessageBox(self)
+        loading_msg.setWindowTitle("提示")
+        loading_msg.setText("正在获取剧集信息，请稍候...")
+        loading_msg.setStandardButtons(QMessageBox.NoButton)
+        loading_msg.show()
+        QApplication.processEvents()  # 确保消息框显示
         
         # 创建任务创建线程
         self.task_creation_thread = TaskCreationThread(task_data)
         self.task_creation_thread.finished.connect(
             lambda success, msg, episodes: self.on_task_creation_finished(
-                success, msg, episodes, task_data
+                success, msg, episodes, task_data, loading_msg
             )
         )
         self.task_creation_thread.start()
     
     def on_task_creation_finished(self, success: bool, message: str, 
-                                  episodes: list, task_data: dict):
+                                  episodes: list, task_data: dict, loading_msg=None):
         """任务创建完成回调"""
+        # 确保关闭加载提示（在所有情况下）
+        try:
+            if loading_msg:
+                loading_msg.close()
+                loading_msg.deleteLater()  # 确保完全释放
+        except Exception as e:
+            logger.debug(f"关闭loading_msg时出错: {e}")
+        
         if not success:
             QMessageBox.critical(self, "错误", message)
+            return
+        
+        # 显示获取到的剧集信息
+        reply = QMessageBox.question(
+            self,
+            "获取剧集信息成功",
+            f"{message}\n\n是否创建任务并开始下载？",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes
+        )
+        
+        if reply == QMessageBox.No:
             return
         
         try:
@@ -256,12 +325,6 @@ class MainWindow(QMainWindow):
                         ep['episode_url'] == episode['episode_url']):
                         self.download_manager.add_episode(ep['id'])
                         break
-            
-            QMessageBox.information(
-                self,
-                "成功",
-                f"{message}\n任务已创建并开始下载！"
-            )
             
             # 切换到任务进度页面
             self.switch_page(1)

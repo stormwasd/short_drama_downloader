@@ -82,6 +82,16 @@ class Database:
         conn.commit()
         conn.close()
     
+    def task_name_exists(self, task_name: str) -> bool:
+        """检查任务名称是否已存在"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT COUNT(*) FROM tasks WHERE task_name = ?", (task_name,))
+        count = cursor.fetchone()[0]
+        conn.close()
+        return count > 0
+    
     def create_task(self, task_name: str, source: str, drama_name: str, 
                    drama_url: str, start_episode: int, end_episode: int, 
                    storage_path: str) -> int:
@@ -210,6 +220,23 @@ class Database:
             UPDATE episodes 
             SET status = 'deleted', updated_at = CURRENT_TIMESTAMP
             WHERE id IN ({placeholders})
+        """, episode_ids)
+        
+        conn.commit()
+        conn.close()
+    
+    def delete_completed_episodes(self, episode_ids: List[int]):
+        """删除已完成的剧集记录（从数据库中物理删除）"""
+        if not episode_ids:
+            return
+        
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        placeholders = ','.join(['?'] * len(episode_ids))
+        cursor.execute(f"""
+            DELETE FROM episodes 
+            WHERE id IN ({placeholders}) AND status = 'completed'
         """, episode_ids)
         
         conn.commit()

@@ -31,6 +31,12 @@ class Config:
     WINDOW_WIDTH: int = 1200
     WINDOW_HEIGHT: int = 800
     
+    # 字体配置（调整为舒适的大小）
+    FONT_SIZE: int = 22  # 基础字体大小
+    LABEL_FONT_SIZE: int = 22  # 标签字体大小
+    INPUT_FONT_SIZE: int = 20  # 输入框字体大小
+    TABLE_FONT_SIZE: int = 18  # 表格字体大小
+    
     # ========== 剧集配置 ==========
     # 剧集最大数量
     EPISODE_MAX: int = 200
@@ -53,6 +59,10 @@ class Config:
     # 日志格式
     LOG_FORMAT: str = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     
+    # ========== 版本配置 ==========
+    # 版本号
+    VERSION: str = "1.0"
+    
     @classmethod
     def get_all_config(cls) -> Dict[str, Any]:
         """获取所有配置项"""
@@ -72,6 +82,11 @@ class Config:
             'DATABASE_NAME': cls.DATABASE_NAME,
             'LOG_LEVEL': cls.LOG_LEVEL,
             'LOG_FORMAT': cls.LOG_FORMAT,
+            'FONT_SIZE': cls.FONT_SIZE,
+            'LABEL_FONT_SIZE': cls.LABEL_FONT_SIZE,
+            'INPUT_FONT_SIZE': cls.INPUT_FONT_SIZE,
+            'TABLE_FONT_SIZE': cls.TABLE_FONT_SIZE,
+            'VERSION': cls.VERSION,
         }
     
     @classmethod
