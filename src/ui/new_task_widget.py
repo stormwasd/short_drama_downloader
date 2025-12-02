@@ -241,6 +241,38 @@ class NewTaskWidget(QWidget):
         url_layout.addWidget(self.url_input)
         layout.addLayout(url_layout)
         
+        # xtoken (仅shortlinetv时显示)
+        self.xtoken_layout = QHBoxLayout()
+        self.xtoken_layout.setSpacing(15)
+        xtoken_label = QLabel("xtoken:")
+        xtoken_label.setFixedWidth(label_width)
+        xtoken_label.setFont(name_font)
+        self.xtoken_input = QLineEdit()
+        self.xtoken_input.setFont(input_font)
+        self.xtoken_input.setPlaceholderText("例如: 5b8f1e7d3a9c02a446d7e12f891a34bc")
+        self.xtoken_layout.addWidget(xtoken_label)
+        self.xtoken_layout.addWidget(self.xtoken_input)
+        self.xtoken_widget = QWidget()
+        self.xtoken_widget.setLayout(self.xtoken_layout)
+        self.xtoken_widget.setVisible(False)  # 默认隐藏
+        layout.addWidget(self.xtoken_widget)
+        
+        # uid (仅shortlinetv时显示)
+        self.uid_layout = QHBoxLayout()
+        self.uid_layout.setSpacing(15)
+        uid_label = QLabel("uid:")
+        uid_label.setFixedWidth(label_width)
+        uid_label.setFont(name_font)
+        self.uid_input = QLineEdit()
+        self.uid_input.setFont(input_font)
+        self.uid_input.setPlaceholderText("例如: 720934815067")
+        self.uid_layout.addWidget(uid_label)
+        self.uid_layout.addWidget(self.uid_input)
+        self.uid_widget = QWidget()
+        self.uid_widget.setLayout(self.uid_layout)
+        self.uid_widget.setVisible(False)  # 默认隐藏
+        layout.addWidget(self.uid_widget)
+        
         # 剧集区间（改为一行布局，间距均匀）
         episode_range_layout = QHBoxLayout()
         episode_range_layout.setSpacing(15)
@@ -358,17 +390,23 @@ class NewTaskWidget(QWidget):
         # 重置用户修改标记
         self.user_modified_range = False
         if source == "shortlinetv":
-            self.url_input.setPlaceholderText("https://shortlinetv.com/videos/xxx")
+            self.url_input.setPlaceholderText("例如: https://shortlinetv.com/videos/xxx")
             self.start_episode_spin.setValue(1)
             self.end_episode_spin.setValue(0)
             self.start_episode_default = 1
             self.end_episode_default = 0
+            # 显示xtoken和uid输入框
+            self.xtoken_widget.setVisible(True)
+            self.uid_widget.setVisible(True)
         elif source == "reelshort":
-            self.url_input.setPlaceholderText("https://www.reelshort.com/episodes/trailer-you-fired-a-fashion-icon-687f2a41314aed63020928f9-dr1wo1epdw?play_time=1")
+            self.url_input.setPlaceholderText("例如: https://www.reelshort.com/episodes/trailer-you-fired-a-fashion-icon-687f2a41314aed63020928f9-dr1wo1epdw?play_time=1")
             self.start_episode_spin.setValue(0)
             self.end_episode_spin.setValue(0)
             self.start_episode_default = 0
             self.end_episode_default = 0
+            # 隐藏xtoken和uid输入框
+            self.xtoken_widget.setVisible(False)
+            self.uid_widget.setVisible(False)
     
     def on_start_episode_changed(self, value: int):
         """开始剧集变化时的处理"""
@@ -413,6 +451,20 @@ class NewTaskWidget(QWidget):
             QMessageBox.warning(self, "输入错误", "请选择存储地址！")
             return
         
+        # 验证shortlinetv的xtoken和uid
+        source = self.source_combo.currentText()
+        xtoken = ""
+        uid = ""
+        if source == "shortlinetv":
+            xtoken = self.xtoken_input.text().strip()
+            uid = self.uid_input.text().strip()
+            if not xtoken:
+                QMessageBox.warning(self, "输入错误", "请输入xtoken！")
+                return
+            if not uid:
+                QMessageBox.warning(self, "输入错误", "请输入uid！")
+                return
+        
         # 验证剧集区间
         start_ep = self.start_episode_spin.value()
         end_ep = self.end_episode_spin.value()
@@ -452,7 +504,9 @@ class NewTaskWidget(QWidget):
             "start_episode": start_ep,
             "end_episode": end_ep,
             "storage_path": str(storage_path.absolute()),
-            "is_default_range": is_default_range  # 传递是否是默认值
+            "is_default_range": is_default_range,  # 传递是否是默认值
+            "xtoken": xtoken,  # shortlinetv的access-token
+            "uid": uid  # shortlinetv的uid-token
         }
         
         # 发送信号（不再在这里显示成功消息，由主窗口统一处理）

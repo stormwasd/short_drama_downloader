@@ -50,7 +50,10 @@ class TaskCreationThread(QThread):
             end_episode = self.task_data['end_episode']
             
             if source == 'shortlinetv':
-                client = ShortLineTVClient()
+                # 获取xtoken和uid（如果提供）
+                xtoken = self.task_data.get('xtoken')
+                uid = self.task_data.get('uid')
+                client = ShortLineTVClient(xtoken=xtoken, uid=uid)
                 video_id = client.extract_video_id(drama_url)
                 if not video_id:
                     self.finished.emit(False, "无法从URL中提取video_id", [])
@@ -330,7 +333,9 @@ class MainWindow(QMainWindow):
                 drama_url=task_data['drama_url'],
                 start_episode=task_data['start_episode'],
                 end_episode=task_data['end_episode'],
-                storage_path=task_data['storage_path']
+                storage_path=task_data['storage_path'],
+                xtoken=task_data.get('xtoken'),  # shortlinetv的access-token
+                uid=task_data.get('uid')  # shortlinetv的uid-token
             )
             
             # 添加剧集

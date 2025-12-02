@@ -19,7 +19,8 @@ class ShortLineTVClient:
     
     API_URL = "https://shortlinetv.com/api/frontend/video/episode"
     
-    HEADERS = {
+    # 默认headers模板（如果未提供自定义token和uid，使用默认值）
+    DEFAULT_HEADERS = {
         "accept": "*/*",
         "accept-language": "zh-CN,zh;q=0.9",
         "access-channel": "direct",
@@ -41,12 +42,31 @@ class ShortLineTVClient:
         "x-requested-with": "XMLHttpRequest"
     }
     
-    COOKIES = {
+    DEFAULT_COOKIES = {
         "PC_AC_ACCESS_TOKEN": "a43e0c88aecd58a662ee20fc119efdba",
         "AC_TOKEN": "AJUEDYDaNzIuK0tXBB2ry65eqN7Tn280",
         "pc_ga_utm": "{}",
         "__cf_bm": "7SEzu6x9MGo643kfcy_Rm3eRKEChUYl9E_I3JvXj1MQ-1764500722-1.0.1.1-cUZ72NdmDl3aVZE9Laca9EJWNMga5pPWGvjxkFd5GTSE180troyjW7Dn4_9drOqeUJm1qwSFcveUPUjiiIf_wtQCeFhziAnFYg5DtUakuLk"
     }
+    
+    def __init__(self, xtoken: str = None, uid: str = None):
+        """初始化客户端
+        
+        Args:
+            xtoken: access-token，用于替换headers中的access-token
+            uid: uid-token，用于替换headers中的uid-token
+        """
+        # 构建headers，使用自定义token和uid（如果提供）
+        self.HEADERS = self.DEFAULT_HEADERS.copy()
+        if xtoken:
+            self.HEADERS["access-token"] = xtoken
+        if uid:
+            self.HEADERS["uid-token"] = uid
+        
+        # 构建cookies，使用自定义token（如果提供）
+        self.COOKIES = self.DEFAULT_COOKIES.copy()
+        if xtoken:
+            self.COOKIES["PC_AC_ACCESS_TOKEN"] = xtoken
     
     @staticmethod
     def extract_video_id(url: str) -> Optional[int]:
@@ -239,41 +259,54 @@ class ReelShortClient:
             # reelshort的episode_num = serial_number（从0开始）
             episode_num = serial_number
             
-            # 特殊处理：如果用户明确选择第0集，即使chapter_type不是1也要包含
-            # 否则，只处理正常剧集（chapter_type == 1）
+            # 判断当前剧集是否在用户选择的区间内
+            # 先进行区间判断，再进行chapter_type判断
+            in_range = False
             is_target_episode_0 = (start_episode == 0 and end_episode == 0 and not is_default_range)
-            if not is_target_episode_0 and chapter_type != 1:
+            
+            if is_default_range and start_episode == 0 and end_episode == 0:
+                # 下载所有剧集（默认值）
+                in_range = True
+            elif start_episode == end_episode:
+                # 下载指定的一集
+                in_range = (episode_num == start_episode)
+            else:
+                # 下载指定区间（包含边界）
+                in_range = (start_episode <= episode_num <= end_episode)
+            
+            if not in_range:
                 continue
             
-            # 判断是否下载所有剧集：只有默认值（两个都是0）且is_default_range=True时才下载所有
+            # 区间判断通过后，再进行chapter_type判断
+            # 规则：
+            # 1. 如果用户明确选择第0集（0-0且不是默认值），允许chapter_type不是1
+            # 2. 如果区间包含第0集（start_episode == 0），且当前是第0集，允许chapter_type不是1
+            # 3. 如果下载所有剧集（默认值），只包含正常剧集（chapter_type == 1）
+            # 4. 其他情况，只包含正常剧集（chapter_type == 1）
             if is_default_range and start_episode == 0 and end_episode == 0:
-                # 下载所有剧集，但只包含正常剧集（chapter_type == 1）
+                # 下载所有剧集，只包含正常剧集
                 if chapter_type != 1:
-                    continue
-            elif start_episode == end_episode:
-                # 下载指定的一集（包括第0集）
-                # 用户手动选择0-0时，只下载第0集（允许chapter_type不是1）
-                if episode_num != start_episode:
                     continue
             else:
-                # 下载指定区间
-                if episode_num < start_episode:
-                    continue
-                if end_episode > 0 and episode_num > end_episode:
-                    continue
-                # 对于区间下载，只包含正常剧集
-                if chapter_type != 1:
+                # 非默认值的情况
+                # 如果当前是第0集，且区间包含第0集，允许chapter_type不是1
+                allow_non_type1 = (episode_num == 0 and start_episode == 0)
+                if not allow_non_type1 and chapter_type != 1:
                     continue
             
             # 构建episode URL
-            # 格式: https://www.reelshort.com/episodes/episode-{episode_num}-{slug}-{chapter_id}
-            # 注意：URL中的episode_num需要+1，因为URL格式是episode-1, episode-2...
-            # 但第0集对应的是trailer或episode-0，需要特殊处理
+            # 根据用户提供的示例和反馈：
+            # - serial_number=0 (episode_num=0) → 第0集 → URL格式: trailer-xxx 或 episode-0-xxx
+            # - serial_number=1 (episode_num=1) → 第1集 → URL格式: episode-1-xxx
+            # - serial_number=2 (episode_num=2) → 第2集 → URL格式: episode-2-xxx
+            # 所以URL中的编号 = episode_num（当episode_num > 0时）
+            # 第0集使用trailer-xxx格式
             if episode_num == 0:
-                # 第0集可能是trailer，URL格式可能不同，需要检查实际URL格式
-                # 根据用户提供的示例，第0集可能是trailer-xxx格式
+                # 第0集（trailer）使用trailer-xxx格式
                 episode_url = f"{self.BASE_URL}/episodes/trailer-{slug}-{chapter_id}"
             else:
+                # 其他剧集：URL中的编号 = episode_num
+                # 例如：episode_num=1 → episode-1, episode_num=2 → episode-2
                 episode_url = f"{self.BASE_URL}/episodes/episode-{episode_num}-{slug}-{chapter_id}"
             
             episodes.append({

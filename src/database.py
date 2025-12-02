@@ -58,10 +58,23 @@ class Database:
                 start_episode INTEGER DEFAULT 0,
                 end_episode INTEGER DEFAULT 0,
                 storage_path TEXT NOT NULL,
+                xtoken TEXT,
+                uid TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        
+        # 检查并添加新字段（兼容旧数据库）
+        try:
+            cursor.execute("ALTER TABLE tasks ADD COLUMN xtoken TEXT")
+        except sqlite3.OperationalError:
+            pass  # 字段已存在
+        
+        try:
+            cursor.execute("ALTER TABLE tasks ADD COLUMN uid TEXT")
+        except sqlite3.OperationalError:
+            pass  # 字段已存在
         
         # 剧集表
         cursor.execute("""
@@ -98,17 +111,17 @@ class Database:
     
     def create_task(self, task_name: str, source: str, drama_name: str, 
                    drama_url: str, start_episode: int, end_episode: int, 
-                   storage_path: str) -> int:
+                   storage_path: str, xtoken: str = None, uid: str = None) -> int:
         """创建新任务"""
         conn = self.get_connection()
         cursor = conn.cursor()
         
         cursor.execute("""
             INSERT INTO tasks (task_name, source, drama_name, drama_url, 
-                             start_episode, end_episode, storage_path)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+                             start_episode, end_episode, storage_path, xtoken, uid)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (task_name, source, drama_name, drama_url, 
-              start_episode, end_episode, storage_path))
+              start_episode, end_episode, storage_path, xtoken, uid))
         
         task_id = cursor.lastrowid
         conn.commit()
@@ -230,18 +243,45 @@ class Database:
         conn.close()
     
     def delete_completed_episodes(self, episode_ids: List[int]):
-        """删除已完成的剧集记录（从数据库中物理删除）"""
+        """删除已完成的剧集记录（从数据库中物理删除）
+        
+        删除后，如果某个任务没有任何有效episodes了（只有deleted状态或完全没有episodes），也会删除该任务记录
+        """
         if not episode_ids:
             return
         
         conn = self.get_connection()
         cursor = conn.cursor()
         
+        # 先获取要删除的episodes的task_id，用于后续检查
         placeholders = ','.join(['?'] * len(episode_ids))
+        cursor.execute(f"""
+            SELECT DISTINCT task_id FROM episodes 
+            WHERE id IN ({placeholders})
+        """, episode_ids)
+        affected_task_ids = [row[0] for row in cursor.fetchall()]
+        
+        # 删除episodes
         cursor.execute(f"""
             DELETE FROM episodes 
             WHERE id IN ({placeholders}) AND status = 'completed'
         """, episode_ids)
+        
+        # 检查并删除没有有效episodes的任务
+        # 有效episodes是指状态不是'deleted'的episodes
+        for task_id in affected_task_ids:
+            # 检查该任务是否还有非deleted状态的episodes
+            cursor.execute("""
+                SELECT COUNT(*) FROM episodes 
+                WHERE task_id = ? AND status != 'deleted'
+            """, (task_id,))
+            active_episode_count = cursor.fetchone()[0]
+            
+            if active_episode_count == 0:
+                # 该任务没有任何有效episodes了（只有deleted状态或完全没有episodes），删除任务记录
+                # 同时删除该任务的所有episodes（包括deleted状态的）
+                cursor.execute("DELETE FROM episodes WHERE task_id = ?", (task_id,))
+                cursor.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
         
         conn.commit()
         conn.close()
