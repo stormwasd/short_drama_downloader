@@ -48,7 +48,7 @@ def build_exe():
         
         cmd = [
             "pyinstaller",
-            "--name=短剧下载器",
+            "--name=Dramaseek",
             "--onefile",  # 打包成单个exe文件
             "--windowed",  # 不显示控制台窗口
             "--clean",

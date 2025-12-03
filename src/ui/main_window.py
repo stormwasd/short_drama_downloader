@@ -107,7 +107,7 @@ class MainWindow(QMainWindow):
     
     def init_ui(self):
         """初始化UI"""
-        self.setWindowTitle(f"短剧下载器 (v{config.VERSION})")
+        self.setWindowTitle(f"Dramaseek (v{config.VERSION})")
         self.setGeometry(
             config.WINDOW_X, 
             config.WINDOW_Y, 

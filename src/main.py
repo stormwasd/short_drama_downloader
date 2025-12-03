@@ -78,7 +78,7 @@ def main():
     if single_instance.is_running:
         # 需要先创建QApplication才能使用窗口查找功能
         # 但我们可以直接使用Win32 API，所以这里先尝试激活窗口
-        window_title = f"短剧下载器 (v{config.VERSION})"
+        window_title = f"Dramaseek (v{config.VERSION})"
         if single_instance.activate_existing_window(window_title):
             # 成功激活已存在的窗口，退出当前实例
             sys.exit(0)
