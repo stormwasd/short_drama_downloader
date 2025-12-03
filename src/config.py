@@ -9,7 +9,7 @@ class Config:
     
     # ========== 下载配置 ==========
     # 最大并发下载数
-    MAX_CONCURRENT_DOWNLOADS: int = 3
+    MAX_CONCURRENT_DOWNLOADS: int = 5
     
     # 队列检查间隔（秒）
     QUEUE_CHECK_INTERVAL: int = 5

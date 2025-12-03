@@ -4,6 +4,7 @@
 import os
 import logging
 from pathlib import Path
+from datetime import datetime, timedelta
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                              QPushButton, QTableWidget, QTableWidgetItem,
                              QCheckBox, QHeaderView, QMessageBox, QTabWidget)
@@ -13,11 +14,59 @@ from PyQt5.QtGui import QColor, QFont
 try:
     from src.database import Database
     from src.config import config
+    from src.ui.message_box_helper import show_information, show_critical, show_question
 except ImportError:
     from ..database import Database
     from ..config import config
+    from ..ui.message_box_helper import show_information, show_critical, show_question
 
 logger = logging.getLogger(__name__)
+
+
+def utc_to_beijing_time(utc_time_str: str) -> str:
+    """
+    将UTC时间字符串转换为北京时间字符串（UTC+8）
+    
+    Args:
+        utc_time_str: UTC时间字符串，格式为 'YYYY-MM-DD HH:MM:SS' 或 'YYYY-MM-DD HH:MM:SS.sss'
+    
+    Returns:
+        北京时间字符串，格式为 'YYYY-MM-DD HH:MM:SS'
+    """
+    if not utc_time_str or not utc_time_str.strip():
+        return utc_time_str
+    
+    try:
+        # 尝试解析不同的时间格式
+        time_formats = [
+            '%Y-%m-%d %H:%M:%S.%f',  # 带毫秒
+            '%Y-%m-%d %H:%M:%S',      # 标准格式
+            '%Y-%m-%dT%H:%M:%S.%f',   # ISO格式带毫秒
+            '%Y-%m-%dT%H:%M:%S',      # ISO格式
+        ]
+        
+        dt = None
+        for fmt in time_formats:
+            try:
+                dt = datetime.strptime(utc_time_str.strip(), fmt)
+                break
+            except ValueError:
+                continue
+        
+        if dt is None:
+            # 如果无法解析，返回原字符串
+            logger.warning(f"无法解析时间格式: {utc_time_str}")
+            return utc_time_str
+        
+        # 添加8小时（北京时间 = UTC + 8小时）
+        beijing_dt = dt + timedelta(hours=8)
+        
+        # 返回格式化的时间字符串
+        return beijing_dt.strftime('%Y-%m-%d %H:%M:%S')
+    
+    except Exception as e:
+        logger.error(f"时间转换失败: {utc_time_str}, 错误: {e}")
+        return utc_time_str
 
 
 class TaskProgressWidget(QWidget):
@@ -154,7 +203,7 @@ class TaskProgressWidget(QWidget):
         self.downloading_table = QTableWidget()
         self.downloading_table.setColumnCount(7)
         self.downloading_table.setHorizontalHeaderLabels([
-            "选择", "任务名称", "剧集网址", "剧集名称", "下载进度", "存储路径", "操作"
+            "选择", "任务名称", "剧集网址", "剧集名称", "下载进度", "存储路径", "状态"
         ])
         # 设置列宽：选择列较窄，其他列自适应
         header = self.downloading_table.horizontalHeader()
@@ -359,13 +408,23 @@ class TaskProgressWidget(QWidget):
             self.downloading_table.setCellWidget(row, 0, checkbox)
             
             # 任务名称
-            self.downloading_table.setItem(row, 1, QTableWidgetItem(episode.get('task_name', '')))
+            task_name_item = QTableWidgetItem(episode.get('task_name', ''))
+            task_name_item.setTextAlignment(Qt.AlignCenter)
+            self.downloading_table.setItem(row, 1, task_name_item)
             
             # 剧集网址
-            self.downloading_table.setItem(row, 2, QTableWidgetItem(episode.get('episode_url', '')))
+            episode_url = episode.get('episode_url', '')
+            episode_url_item = QTableWidgetItem(episode_url)
+            episode_url_item.setTextAlignment(Qt.AlignCenter)
+            episode_url_item.setToolTip(episode_url)  # 设置tooltip显示完整内容
+            self.downloading_table.setItem(row, 2, episode_url_item)
             
             # 剧集名称
-            self.downloading_table.setItem(row, 3, QTableWidgetItem(episode.get('episode_name', '')))
+            episode_name = episode.get('episode_name', '')
+            episode_name_item = QTableWidgetItem(episode_name)
+            episode_name_item.setTextAlignment(Qt.AlignCenter)
+            episode_name_item.setToolTip(episode_name)  # 设置tooltip显示完整内容
+            self.downloading_table.setItem(row, 3, episode_name_item)
             
             # 下载进度
             progress = episode.get('progress', 0.0)
@@ -386,20 +445,25 @@ class TaskProgressWidget(QWidget):
             else:
                 progress_item = QTableWidgetItem("等待中")
                 progress_item.setForeground(QColor(128, 128, 128))
+            progress_item.setTextAlignment(Qt.AlignCenter)
             self.downloading_table.setItem(row, 4, progress_item)
             
             # 存储路径
             storage_path = episode.get('task_storage_path', '') or episode.get('storage_path', '')
-            self.downloading_table.setItem(row, 5, QTableWidgetItem(storage_path))
+            storage_path_item = QTableWidgetItem(storage_path)
+            storage_path_item.setTextAlignment(Qt.AlignCenter)
+            self.downloading_table.setItem(row, 5, storage_path_item)
             
-            # 操作
+            # 状态
             status_text = {
                 'pending': '等待中',
                 'downloading': '下载中',
                 'error': '错误',
                 'deleted': '已删除'
             }.get(status, status)
-            self.downloading_table.setItem(row, 6, QTableWidgetItem(status_text))
+            status_item = QTableWidgetItem(status_text)
+            status_item.setTextAlignment(Qt.AlignCenter)
+            self.downloading_table.setItem(row, 6, status_item)
     
     def refresh_completed(self):
         """刷新已完成列表"""
@@ -429,21 +493,36 @@ class TaskProgressWidget(QWidget):
             self.completed_table.setCellWidget(row, 0, checkbox)
             
             # 任务名称
-            self.completed_table.setItem(row, 1, QTableWidgetItem(episode.get('task_name', '')))
+            task_name_item = QTableWidgetItem(episode.get('task_name', ''))
+            task_name_item.setTextAlignment(Qt.AlignCenter)
+            self.completed_table.setItem(row, 1, task_name_item)
             
             # 剧集网址
-            self.completed_table.setItem(row, 2, QTableWidgetItem(episode.get('episode_url', '')))
+            episode_url = episode.get('episode_url', '')
+            episode_url_item = QTableWidgetItem(episode_url)
+            episode_url_item.setTextAlignment(Qt.AlignCenter)
+            episode_url_item.setToolTip(episode_url)  # 设置tooltip显示完整内容
+            self.completed_table.setItem(row, 2, episode_url_item)
             
             # 剧集名称
-            self.completed_table.setItem(row, 3, QTableWidgetItem(episode.get('episode_name', '')))
+            episode_name = episode.get('episode_name', '')
+            episode_name_item = QTableWidgetItem(episode_name)
+            episode_name_item.setTextAlignment(Qt.AlignCenter)
+            episode_name_item.setToolTip(episode_name)  # 设置tooltip显示完整内容
+            self.completed_table.setItem(row, 3, episode_name_item)
             
             # 存储路径
             storage_path = episode.get('storage_path', '') or episode.get('task_storage_path', '')
-            self.completed_table.setItem(row, 4, QTableWidgetItem(storage_path))
+            storage_path_item = QTableWidgetItem(storage_path)
+            storage_path_item.setTextAlignment(Qt.AlignCenter)
+            self.completed_table.setItem(row, 4, storage_path_item)
             
-            # 完成时间
+            # 完成时间（转换为北京时间）
             updated_at = episode.get('updated_at', '')
-            self.completed_table.setItem(row, 5, QTableWidgetItem(updated_at))
+            beijing_time = utc_to_beijing_time(updated_at)
+            updated_at_item = QTableWidgetItem(beijing_time)
+            updated_at_item.setTextAlignment(Qt.AlignCenter)
+            self.completed_table.setItem(row, 5, updated_at_item)
     
     def select_all_downloading(self, checked: bool):
         """全选/全不选下载中的剧集"""
@@ -464,10 +543,10 @@ class TaskProgressWidget(QWidget):
                     selected_ids.append(episode_id)
         
         if not selected_ids:
-            QMessageBox.information(self, "提示", "请先选择要删除的剧集！")
+            show_information(self, "提示", "请先选择要删除的剧集！")
             return
         
-        reply = QMessageBox.question(
+        reply = show_question(
             self,
             "确认删除",
             f"确定要删除选中的 {len(selected_ids)} 个剧集吗？",
@@ -478,7 +557,7 @@ class TaskProgressWidget(QWidget):
         if reply == QMessageBox.Yes:
             self.db.delete_episodes(selected_ids)
             self.refresh_downloading()
-            QMessageBox.information(self, "成功", "已删除选中的剧集！")
+            show_information(self, "成功", "已删除选中的剧集！")
     
     def select_all_completed(self, checked: bool):
         """全选/全不选已完成的剧集"""
@@ -503,11 +582,11 @@ class TaskProgressWidget(QWidget):
                     })
         
         if not selected_items:
-            QMessageBox.information(self, "提示", "请先选择要删除的剧集！")
+            show_information(self, "提示", "请先选择要删除的剧集！")
             return
         
         # 询问是否删除文件
-        reply = QMessageBox.question(
+        reply = show_question(
             self,
             "确认删除",
             f"确定要删除选中的 {len(selected_items)} 个剧集吗？\n\n是否同时删除对应的视频文件？",
@@ -544,7 +623,7 @@ class TaskProgressWidget(QWidget):
             deleted_count = len(episode_ids)
         except Exception as e:
             logger.error(f"删除记录失败: {e}")
-            QMessageBox.critical(self, "错误", f"删除记录失败: {str(e)}")
+            show_critical(self, "错误", f"删除记录失败: {str(e)}")
             return
         
         self.refresh_completed()
@@ -552,5 +631,5 @@ class TaskProgressWidget(QWidget):
         msg = f"已删除 {deleted_count} 条记录"
         if delete_files:
             msg += f"，已删除 {file_deleted_count} 个文件"
-        QMessageBox.information(self, "成功", msg)
+        show_information(self, "成功", msg)
 

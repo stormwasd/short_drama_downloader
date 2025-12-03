@@ -171,6 +171,24 @@ class ReelShortClient:
         "x-nextjs-data": "1"
     }
     
+    # 用于获取buildId的headers（与用户提供的curl命令一致）
+    PAGE_HEADERS = {
+        "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+        "accept-language": "zh-CN,zh;q=0.9",
+        "cache-control": "no-cache",
+        "pragma": "no-cache",
+        "priority": "u=0, i",
+        "sec-ch-ua": '"Chromium";v="142", "Google Chrome";v="142", "Not_A Brand";v="99"',
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": '"Windows"',
+        "sec-fetch-dest": "document",
+        "sec-fetch-mode": "navigate",
+        "sec-fetch-site": "same-origin",
+        "sec-fetch-user": "?1",
+        "upgrade-insecure-requests": "1",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36"
+    }
+    
     @staticmethod
     def extract_slug(url: str) -> Optional[str]:
         """从URL中提取slug"""
@@ -206,11 +224,67 @@ class ReelShortClient:
         
         return None
     
-    def get_movie_data(self, slug: str) -> Dict:
-        """获取电影数据"""
+    def get_build_id(self, drama_url: str) -> str:
+        """从剧集页面HTML中提取buildId
+        
+        Args:
+            drama_url: 剧集网址，例如: https://www.reelshort.com/episodes/trailer-xxx-xxx
+            
+        Returns:
+            buildId字符串，例如: 7f1705b
+            
+        Raises:
+            Exception: 如果无法获取或提取buildId
+        """
         try:
-            # 构建API URL
-            api_url = f"{self.BASE_URL}/_next/data/6af1690/en/movie/{slug}.json"
+            # 使用PAGE_HEADERS请求剧集页面
+            response = requests.get(
+                drama_url,
+                headers=self.PAGE_HEADERS,
+                timeout=config.API_TIMEOUT
+            )
+            response.raise_for_status()
+            
+            # 从HTML中提取buildId
+            # 格式: "buildId":"7f1705b" 或 "buildId": "7f1705b"
+            html_content = response.text
+            build_id_pattern = r'"buildId"\s*:\s*"([^"]+)"'
+            match = re.search(build_id_pattern, html_content)
+            
+            if match:
+                build_id = match.group(1)
+                logger.info(f"成功提取buildId: {build_id}")
+                return build_id
+            else:
+                raise Exception("无法从页面HTML中提取buildId")
+        
+        except requests.exceptions.RequestException as e:
+            logger.error(f"请求reelshort页面失败: {e}")
+            raise Exception(f"获取buildId失败: {str(e)}")
+        except Exception as e:
+            logger.error(f"提取buildId失败: {e}")
+            raise Exception(f"提取buildId失败: {str(e)}")
+    
+    def get_movie_data(self, slug: str, drama_url: str = None, build_id: str = None) -> Dict:
+        """获取电影数据
+        
+        Args:
+            slug: 剧集slug
+            drama_url: 剧集网址（用于获取buildId，如果build_id未提供）
+            build_id: buildId（如果提供则直接使用，否则从drama_url获取）
+            
+        Returns:
+            电影数据字典
+        """
+        try:
+            # 如果没有提供build_id，则从drama_url获取
+            if not build_id:
+                if not drama_url:
+                    raise Exception("需要提供drama_url或build_id")
+                build_id = self.get_build_id(drama_url)
+            
+            # 构建API URL（使用动态获取的buildId）
+            api_url = f"{self.BASE_URL}/_next/data/{build_id}/en/movie/{slug}.json"
             params = {"slug": slug}
             
             response = requests.get(

@@ -96,6 +96,15 @@ class Database:
             )
         """)
         
+        # 配置表（用于存储用户设置）
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
         conn.commit()
         conn.close()
     
@@ -310,4 +319,28 @@ class Database:
         episodes = [dict(row) for row in cursor.fetchall()]
         conn.close()
         return episodes
+    
+    def set_setting(self, key: str, value: str):
+        """保存设置"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            INSERT OR REPLACE INTO settings (key, value, updated_at)
+            VALUES (?, ?, CURRENT_TIMESTAMP)
+        """, (key, value))
+        
+        conn.commit()
+        conn.close()
+    
+    def get_setting(self, key: str, default: str = None) -> Optional[str]:
+        """获取设置"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT value FROM settings WHERE key = ?", (key,))
+        row = cursor.fetchone()
+        conn.close()
+        
+        return row[0] if row else default
 

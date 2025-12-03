@@ -15,6 +15,7 @@ try:
     from src.config import config
     from src.ui.new_task_widget import NewTaskWidget
     from src.ui.task_progress_widget import TaskProgressWidget
+    from src.ui.message_box_helper import show_information, show_warning, show_critical, show_question
 except ImportError:
     # 如果绝对导入失败，使用相对导入（开发模式）
     from ..database import Database
@@ -23,6 +24,7 @@ except ImportError:
     from ..config import config
     from .new_task_widget import NewTaskWidget
     from .task_progress_widget import TaskProgressWidget
+    from .message_box_helper import show_information, show_warning, show_critical, show_question
 
 # 配置日志
 logging.basicConfig(
@@ -71,7 +73,8 @@ class TaskCreationThread(QThread):
                     self.finished.emit(False, "无法从URL中提取slug", [])
                     return
                 
-                api_data = client.get_movie_data(slug)
+                # 传递drama_url以动态获取buildId
+                api_data = client.get_movie_data(slug, drama_url=drama_url)
                 # 传递is_default_range参数
                 is_default_range = self.task_data.get('is_default_range', False)
                 episodes = client.parse_episodes(api_data, slug, start_episode, end_episode, is_default_range)
@@ -148,9 +151,9 @@ class MainWindow(QMainWindow):
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
         
-        # 顶部按钮栏
+        # 顶部按钮栏（右边距与创建任务按钮对齐，50px）
         button_layout = QHBoxLayout()
-        button_layout.setContentsMargins(10, 10, 10, 10)
+        button_layout.setContentsMargins(10, 10, 50, 10)
         button_layout.setSpacing(10)
         
         self.new_task_btn = QPushButton("新建任务")
@@ -162,8 +165,8 @@ class MainWindow(QMainWindow):
                 color: white;
                 border: none;
                 padding: 10px 20px;
-                border-radius: 4px;
-                font-size: 14px;
+                border-radius: 6px;
+                font-size: 17px;
                 font-weight: bold;
             }
             QPushButton:checked {
@@ -183,8 +186,8 @@ class MainWindow(QMainWindow):
                 color: white;
                 border: none;
                 padding: 10px 20px;
-                border-radius: 4px;
-                font-size: 14px;
+                border-radius: 6px;
+                font-size: 17px;
                 font-weight: bold;
             }
             QPushButton:checked {
@@ -196,9 +199,9 @@ class MainWindow(QMainWindow):
         """)
         self.progress_btn.clicked.connect(lambda: self.switch_page(1))
         
+        button_layout.addStretch()
         button_layout.addWidget(self.new_task_btn)
         button_layout.addWidget(self.progress_btn)
-        button_layout.addStretch()
         
         main_layout.addLayout(button_layout)
         
@@ -206,7 +209,7 @@ class MainWindow(QMainWindow):
         self.stacked_widget = QStackedWidget()
         
         # 新建任务页面
-        self.new_task_widget = NewTaskWidget()
+        self.new_task_widget = NewTaskWidget(db=self.db)
         self.new_task_widget.task_created.connect(self.on_task_created)
         self.stacked_widget.addWidget(self.new_task_widget)
         
@@ -227,19 +230,7 @@ class MainWindow(QMainWindow):
                 font-family: "Microsoft YaHei", "SimHei", Arial;
                 font-size: 12px;
             }
-            QMessageBox {
-                /* 弹窗使用系统默认样式，不继承自定义样式 */
-                font-family: initial;
-                font-size: initial;
-            }
-            QMessageBox QLabel {
-                font-family: initial;
-                font-size: initial;
-            }
-            QMessageBox QPushButton {
-                font-family: initial;
-                font-size: initial;
-            }
+            /* QMessageBox样式由message_box_helper统一管理 */
         """)
     
     def init_download_manager(self):
@@ -270,7 +261,7 @@ class MainWindow(QMainWindow):
         """处理任务创建"""
         # 检查任务名称是否重复
         if self.db.task_name_exists(task_data['task_name']):
-            reply = QMessageBox.question(
+            reply = show_question(
                 self,
                 "任务名称重复",
                 f"任务名称 '{task_data['task_name']}' 已存在，是否继续创建？",
@@ -281,10 +272,17 @@ class MainWindow(QMainWindow):
                 return
         
         # 显示加载提示
-        loading_msg = QMessageBox(self)
-        loading_msg.setWindowTitle("提示")
-        loading_msg.setText("正在获取剧集信息，请稍候...")
-        loading_msg.setStandardButtons(QMessageBox.NoButton)
+        try:
+            from src.ui.message_box_helper import create_message_box
+        except ImportError:
+            from ..ui.message_box_helper import create_message_box
+        loading_msg = create_message_box(
+            self, 
+            "提示", 
+            "正在获取剧集信息，请稍候...",
+            QMessageBox.Information,
+            QMessageBox.NoButton
+        )
         loading_msg.show()
         QApplication.processEvents()  # 确保消息框显示
         
@@ -309,11 +307,11 @@ class MainWindow(QMainWindow):
             logger.debug(f"关闭loading_msg时出错: {e}")
         
         if not success:
-            QMessageBox.critical(self, "错误", message)
+            show_critical(self, "错误", message)
             return
         
         # 显示获取到的剧集信息
-        reply = QMessageBox.question(
+        reply = show_question(
             self,
             "获取剧集信息成功",
             f"{message}\n\n是否创建任务并开始下载？",
@@ -356,7 +354,7 @@ class MainWindow(QMainWindow):
         
         except Exception as e:
             logger.error(f"保存任务时出错: {e}")
-            QMessageBox.critical(
+            show_critical(
                 self,
                 "错误",
                 f"保存任务失败: {str(e)}"

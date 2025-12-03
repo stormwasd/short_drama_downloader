@@ -39,6 +39,7 @@ from PyQt5.QtCore import Qt
 try:
     from src.ui.main_window import MainWindow
     from src.config import config
+    from src.single_instance import SingleInstance
 except ImportError as e:
     # 如果绝对导入失败，打印详细的错误信息帮助调试
     print("=" * 60)
@@ -70,13 +71,40 @@ def main():
         print(f"配置错误: {e}")
         sys.exit(1)
     
+    # 检查单实例
+    single_instance = SingleInstance()
+    
+    # 如果已有实例运行，激活已存在的窗口并退出
+    if single_instance.is_running:
+        # 需要先创建QApplication才能使用窗口查找功能
+        # 但我们可以直接使用Win32 API，所以这里先尝试激活窗口
+        window_title = f"短剧下载器 (v{config.VERSION})"
+        if single_instance.activate_existing_window(window_title):
+            # 成功激活已存在的窗口，退出当前实例
+            sys.exit(0)
+        else:
+            # 无法激活窗口，可能窗口还未创建完成，等待一下再试
+            # 或者直接退出（因为已有实例在运行）
+            sys.exit(0)
+    
+    # 创建QApplication
     app = QApplication(sys.argv)
     app.setAttribute(Qt.AA_EnableHighDpiScaling)
     app.setAttribute(Qt.AA_UseHighDpiPixmaps)
     
+    # 在应用退出时释放单实例资源
+    def cleanup():
+        single_instance.release()
+    
+    app.aboutToQuit.connect(cleanup)
+    
     # 创建主窗口
     window = MainWindow()
     window.show()
+    
+    # 确保窗口显示在最前面（首次启动时）
+    window.raise_()
+    window.activateWindow()
     
     sys.exit(app.exec_())
 
