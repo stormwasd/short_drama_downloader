@@ -167,7 +167,7 @@ class SingleInstance:
             import time
             
             if window_title is None:
-                window_title = "短剧下载器"
+                window_title = "Dramaseek"
             
             # 查找窗口（带重试机制，因为窗口可能还未创建完成）
             for attempt in range(max_retries):

@@ -1,4 +1,4 @@
-# 短剧下载器
+# Dramaseek
 
 一个功能强大的短剧下载工具，支持 shortlinetv 和 reelshort 两个平台。
 
@@ -71,7 +71,7 @@ python build_exe.py
 pyinstaller short_drama.spec
 ```
 
-打包完成后，exe文件位于 `dist/短剧下载器.exe`
+打包完成后，exe文件位于 `dist/Dramaseek.exe`
 
 ### 打包说明
 

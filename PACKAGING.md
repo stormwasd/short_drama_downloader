@@ -24,7 +24,7 @@ pyinstaller short_drama.spec
 
 ### short_drama.spec
 - **入口文件**: `src/main.py`
-- **输出名称**: `短剧下载器.exe`
+- **输出名称**: `Dramaseek.exe`
 - **图标**: `resources/icon.ico`（如果存在）
 - **数据文件**: 包含 `resources/icon.ico` 到打包后的 `resources/` 目录
 - **隐藏导入**: 包含所有必要的模块（PyQt5、yt_dlp、requests等）
@@ -33,7 +33,7 @@ pyinstaller short_drama.spec
 ### 打包后的文件结构
 ```
 dist/
-  └── 短剧下载器.exe  (单个可执行文件)
+  └── Dramaseek.exe  (单个可执行文件)
 ```
 
 ### 注意事项
