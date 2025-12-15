@@ -85,7 +85,7 @@ def build_exe():
         print("打包完成！")
         print("="*50)
         
-        exe_path = project_root / 'dist' / '短剧下载器.exe'
+        exe_path = project_root / 'dist' / 'Dramaseek_1.0.1_x86_64.exe'
         if exe_path.exists():
             size_mb = exe_path.stat().st_size / (1024 * 1024)
             print(f"\n✓ exe文件位置: {exe_path}")

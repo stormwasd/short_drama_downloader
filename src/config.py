@@ -1,6 +1,7 @@
 """
 配置文件 - 统一管理所有配置项
 """
+import re
 from typing import Dict, Any
 
 
@@ -61,7 +62,7 @@ class Config:
     
     # ========== 版本配置 ==========
     # 版本号
-    VERSION: str = "1.0"
+    VERSION: str = "1.0.1"
     
     @classmethod
     def get_all_config(cls) -> Dict[str, Any]:
@@ -103,6 +104,38 @@ class Config:
         if cls.FILENAME_MAX_LENGTH < 1:
             raise ValueError("FILENAME_MAX_LENGTH 必须大于0")
         return True
+    
+    @classmethod
+    def sanitize_filename(cls, filename: str) -> str:
+        """清理文件名，移除Windows不允许的字符和控制字符
+        
+        Args:
+            filename: 原始文件名
+            
+        Returns:
+            清理后的安全文件名
+        """
+        if not filename:
+            return "Unknown"
+        
+        # 移除Windows不允许的字符: < > : " / \ | ? *
+        safe_name = re.sub(r'[<>:"/\\|?*]', '', filename)
+        
+        # 移除控制字符（换行符、回车符、制表符等）
+        safe_name = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', safe_name)
+        
+        # 移除前后空格和点号（Windows不允许文件名以点号结尾）
+        safe_name = safe_name.strip(' .')
+        
+        # 如果清理后为空，使用默认值
+        if not safe_name:
+            safe_name = "Unknown"
+        
+        # 限制文件名长度
+        if len(safe_name) > cls.FILENAME_MAX_LENGTH:
+            safe_name = safe_name[:cls.FILENAME_MAX_LENGTH]
+        
+        return safe_name
 
 
 # 创建全局配置实例

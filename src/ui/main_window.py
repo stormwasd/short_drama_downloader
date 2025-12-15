@@ -3,10 +3,17 @@
 """
 import logging
 import sys
+import re
+import requests
+import urllib3
+from urllib.parse import urlparse, urlunparse
 from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QPushButton, QStackedWidget, QMessageBox, QApplication)
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from pathlib import Path
+
+# 禁用urllib3的SSL警告（用于下载封面时跳过证书验证）
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # 使用绝对导入，兼容打包后的exe
 try:
     from src.database import Database
@@ -34,10 +41,66 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def download_cover_image(cover_url: str, save_path: Path) -> bool:
+    """下载封面图片
+    
+    Args:
+        cover_url: 封面图片URL
+        save_path: 保存路径（包含文件名）
+        
+    Returns:
+        bool: 是否下载成功
+    """
+    if not cover_url:
+        return False
+    
+    try:
+        # 处理URL中的多余斜杠
+        # 将URL解析为组件，然后重新组合以去除多余的斜杠
+        parsed = urlparse(cover_url)
+        # 清理path中的多余斜杠
+        clean_path = re.sub(r'/+', '/', parsed.path)
+        # 重新组合URL
+        clean_url = urlunparse((
+            parsed.scheme,
+            parsed.netloc,
+            clean_path,
+            parsed.params,
+            parsed.query,
+            parsed.fragment
+        ))
+        
+        # 使用基本的headers下载图片
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36',
+            'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+            'Accept-Language': 'zh-CN,zh;q=0.9',
+        }
+        
+        # 下载图片（跳过SSL证书验证，与视频下载保持一致）
+        response = requests.get(clean_url, headers=headers, timeout=config.API_TIMEOUT, stream=True, verify=False)
+        response.raise_for_status()
+        
+        # 确保目录存在
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        # 保存文件
+        with open(save_path, 'wb') as f:
+            for chunk in response.iter_content(chunk_size=8192):
+                f.write(chunk)
+        
+        logger.info(f"封面图片下载成功: {save_path}")
+        return True
+    
+    except Exception as e:
+        logger.error(f"下载封面图片失败: {e}")
+        return False
+
+
 class TaskCreationThread(QThread):
     """任务创建线程，用于异步获取剧集信息"""
     
-    finished = pyqtSignal(bool, str, list)  # 完成信号: (success, message, episodes)
+    finished = pyqtSignal(bool, str, list, str)  # 完成信号: (success, message, episodes, cover_url)
     
     def __init__(self, task_data: dict):
         super().__init__()
@@ -51,6 +114,8 @@ class TaskCreationThread(QThread):
             start_episode = self.task_data['start_episode']
             end_episode = self.task_data['end_episode']
             
+            cover_url = None
+            
             if source == 'shortlinetv':
                 # 获取xtoken和uid（如果提供）
                 xtoken = self.task_data.get('xtoken')
@@ -58,40 +123,46 @@ class TaskCreationThread(QThread):
                 client = ShortLineTVClient(xtoken=xtoken, uid=uid)
                 video_id = client.extract_video_id(drama_url)
                 if not video_id:
-                    self.finished.emit(False, "无法从URL中提取video_id", [])
+                    self.finished.emit(False, "无法从URL中提取video_id", [], "")
                     return
                 
                 api_data = client.get_episodes(video_id)
                 # 传递is_default_range参数
                 is_default_range = self.task_data.get('is_default_range', False)
-                episodes = client.parse_episodes(api_data, start_episode, end_episode, is_default_range)
+                episodes, cover_url = client.parse_episodes(api_data, start_episode, end_episode, is_default_range)
             
             elif source == 'reelshort':
                 client = ReelShortClient()
                 slug = client.extract_slug(drama_url)
                 if not slug:
-                    self.finished.emit(False, "无法从URL中提取slug", [])
+                    self.finished.emit(False, "无法从URL中提取slug", [], "")
                     return
                 
                 # 传递drama_url以动态获取buildId
                 api_data = client.get_movie_data(slug, drama_url=drama_url)
                 # 传递is_default_range参数
                 is_default_range = self.task_data.get('is_default_range', False)
-                episodes = client.parse_episodes(api_data, slug, start_episode, end_episode, is_default_range)
+                episodes, cover_url = client.parse_episodes(api_data, slug, start_episode, end_episode, is_default_range)
             
             else:
-                self.finished.emit(False, f"未知的来源: {source}", [])
+                self.finished.emit(False, f"未知的来源: {source}", [], "")
                 return
             
             if not episodes:
-                self.finished.emit(False, "未找到可下载的剧集", [])
+                self.finished.emit(False, "未找到可下载的剧集", [], "")
                 return
             
-            self.finished.emit(True, f"成功获取 {len(episodes)} 个剧集", episodes)
+            # 构建成功消息（只显示剧集数量，封面数量在用户确认创建任务后显示）
+            message = f"成功获取 {len(episodes)} 个剧集"
+            if cover_url:
+                message += "，检测到1个封面"
+            
+            # 只传递封面URL，不下载封面（在用户确认创建任务后再下载）
+            self.finished.emit(True, message, episodes, cover_url or "")
         
         except Exception as e:
             logger.error(f"创建任务时出错: {e}")
-            self.finished.emit(False, f"创建任务失败: {str(e)}", [])
+            self.finished.emit(False, f"创建任务失败: {str(e)}", [], "")
 
 
 class MainWindow(QMainWindow):
@@ -289,14 +360,14 @@ class MainWindow(QMainWindow):
         # 创建任务创建线程
         self.task_creation_thread = TaskCreationThread(task_data)
         self.task_creation_thread.finished.connect(
-            lambda success, msg, episodes: self.on_task_creation_finished(
-                success, msg, episodes, task_data, loading_msg
+            lambda success, msg, episodes, cover_url: self.on_task_creation_finished(
+                success, msg, episodes, cover_url, task_data, loading_msg
             )
         )
         self.task_creation_thread.start()
     
     def on_task_creation_finished(self, success: bool, message: str, 
-                                  episodes: list, task_data: dict, loading_msg=None):
+                                  episodes: list, cover_url: str, task_data: dict, loading_msg=None):
         """任务创建完成回调"""
         # 确保关闭加载提示（在所有情况下）
         try:
@@ -339,6 +410,45 @@ class MainWindow(QMainWindow):
             # 添加剧集
             self.db.add_episodes(task_id, episodes)
             
+            # 下载封面图片（在用户确认创建任务后）
+            cover_count = 0
+            if cover_url and task_data.get('storage_path'):
+                try:
+                    storage_path = task_data.get('storage_path')
+                    drama_name = task_data.get('drama_name', 'Unknown')
+                    
+                    # 构建保存路径
+                    base_storage_path = Path(storage_path)
+                    # 清理文件夹名中的非法字符和控制字符
+                    safe_drama_name = config.sanitize_filename(drama_name)
+                    
+                    # 创建剧集名称文件夹
+                    drama_storage_path = base_storage_path / safe_drama_name
+                    drama_storage_path.mkdir(parents=True, exist_ok=True)
+                    
+                    # 确定封面文件扩展名
+                    parsed_url = urlparse(cover_url)
+                    path = parsed_url.path
+                    # 尝试从URL中提取扩展名
+                    if '.' in path:
+                        ext = path.split('.')[-1].split('?')[0].lower()
+                        # 验证扩展名是否合理（常见图片格式）
+                        if ext not in ['jpg', 'jpeg', 'png', 'webp', 'gif']:
+                            ext = 'jpg'  # 默认使用jpg
+                    else:
+                        ext = 'jpg'  # 默认使用jpg
+                    
+                    cover_filename = f"cover.{ext}"
+                    cover_save_path = drama_storage_path / cover_filename
+                    
+                    # 下载封面
+                    if download_cover_image(cover_url, cover_save_path):
+                        cover_count = 1
+                        logger.info(f"封面图片下载成功: {cover_save_path}")
+                except Exception as e:
+                    logger.error(f"下载封面时出错: {e}")
+                    # 封面下载失败不影响任务创建
+            
             # 将剧集添加到下载队列
             task_episodes = self.db.get_task_episodes(task_id)
             for episode in episodes:
@@ -348,6 +458,12 @@ class MainWindow(QMainWindow):
                         ep['episode_url'] == episode['episode_url']):
                         self.download_manager.add_episode(ep['id'])
                         break
+            
+            # 显示成功消息（包含封面下载结果）
+            if cover_count > 0:
+                show_information(self, "任务创建成功", f"已创建任务并开始下载，封面已下载")
+            else:
+                show_information(self, "任务创建成功", "已创建任务并开始下载")
             
             # 切换到任务进度页面
             self.switch_page(1)

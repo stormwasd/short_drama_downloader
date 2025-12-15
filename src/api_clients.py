@@ -3,7 +3,7 @@ API客户端，用于获取shortlinetv和reelshort的视频信息
 """
 import re
 import requests
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 import logging
 # 使用绝对导入，兼容打包后的exe
 try:
@@ -103,13 +103,16 @@ class ShortLineTVClient:
             logger.error(f"请求shortlinetv API失败: {e}")
             raise Exception(f"获取剧集信息失败: {str(e)}")
     
-    def parse_episodes(self, api_data: Dict, start_episode: int, end_episode: int, is_default_range: bool = False) -> List[Dict]:
-        """解析剧集数据，返回指定区间的剧集列表
+    def parse_episodes(self, api_data: Dict, start_episode: int, end_episode: int, is_default_range: bool = False) -> Tuple[List[Dict], Optional[str]]:
+        """解析剧集数据，返回指定区间的剧集列表和封面URL
         
         注意：shortlinetv的episode_num从1开始
         - 如果is_default_range=True且start_episode=1且end_episode=0：下载所有剧集
         - 如果用户手动选择1-1：只下载第1集
         - 如果用户选择1-5：下载第1到第5集
+        
+        Returns:
+            (episodes, cover_url): 剧集列表和封面URL
         """
         episodes = []
         
@@ -118,6 +121,9 @@ class ShortLineTVClient:
         
         episode_list = api_data["list"]["episode_list"]
         drama_name = api_data["list"].get("title", "未知剧集")
+        
+        # 提取封面URL（从list.cover字段）
+        cover_url = api_data["list"].get("cover")
         
         # 过滤指定区间的剧集（注意：episode_num从1开始）
         for episode in episode_list:
@@ -146,7 +152,7 @@ class ShortLineTVClient:
                     "download_url": episode["url"]
                 })
         
-        return sorted(episodes, key=lambda x: x["episode_num"])
+        return sorted(episodes, key=lambda x: x["episode_num"]), cover_url
 
 
 class ReelShortClient:
@@ -305,14 +311,17 @@ class ReelShortClient:
             logger.error(f"请求reelshort API失败: {e}")
             raise Exception(f"获取剧集信息失败: {str(e)}")
     
-    def parse_episodes(self, api_data: Dict, slug: str, start_episode: int, end_episode: int, is_default_range: bool = False) -> List[Dict]:
-        """解析剧集数据，返回指定区间的剧集列表
+    def parse_episodes(self, api_data: Dict, slug: str, start_episode: int, end_episode: int, is_default_range: bool = False) -> Tuple[List[Dict], Optional[str]]:
+        """解析剧集数据，返回指定区间的剧集列表和封面URL
         
         注意：reelshort的serial_number从0开始，episode_num也对应从0开始
         - 如果is_default_range=True且start_episode=0且end_episode=0：下载所有剧集
         - 如果用户手动选择0-0：只下载第0集
         - 如果用户选择1-1：只下载第1集
         - 如果用户选择0-5：下载第0到第5集
+        
+        Returns:
+            (episodes, cover_url): 剧集列表和封面URL
         """
         episodes = []
         
@@ -321,6 +330,9 @@ class ReelShortClient:
         
         drama_name = api_data.get("book_title", "未知剧集")
         online_base = api_data["online_base"]
+        
+        # 提取封面URL（从book_pic字段）
+        cover_url = api_data.get("book_pic")
         
         # reelshort的serial_number从0开始，episode_num也对应从0开始
         # 对于第0集，可能需要特殊处理（可能是trailer，chapter_type可能不是1）
@@ -390,5 +402,5 @@ class ReelShortClient:
                 "download_url": episode_url  # reelshort直接使用episode_url作为下载URL
             })
         
-        return sorted(episodes, key=lambda x: x["episode_num"])
+        return sorted(episodes, key=lambda x: x["episode_num"]), cover_url
 

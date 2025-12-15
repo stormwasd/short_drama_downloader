@@ -173,23 +173,16 @@ class DownloadManager:
             # 在存储地址下创建以剧集名称为名的文件夹
             base_storage_path = Path(task_info['storage_path'])
             drama_name = task_info.get('drama_name', 'Unknown')
-            # 清理文件夹名中的非法字符（Windows文件名不允许的字符）
-            import re
-            safe_drama_name = re.sub(r'[<>:"/\\|?*]', '', drama_name).strip()
-            # 限制文件夹名长度
-            if len(safe_drama_name) > config.FILENAME_MAX_LENGTH:
-                safe_drama_name = safe_drama_name[:config.FILENAME_MAX_LENGTH]
+            # 清理文件夹名中的非法字符和控制字符
+            safe_drama_name = config.sanitize_filename(drama_name)
             # 创建剧集名称文件夹
             storage_path = base_storage_path / safe_drama_name
             storage_path.mkdir(parents=True, exist_ok=True)
             
             # 构建输出文件名
             episode_name = episode.get('episode_name', f"Episode_{episode['episode_num']}")
-            # 清理文件名中的非法字符（Windows文件名不允许的字符）
-            safe_name = re.sub(r'[<>:"/\\|?*]', '', episode_name).strip()
-            # 限制文件名长度
-            if len(safe_name) > config.FILENAME_MAX_LENGTH:
-                safe_name = safe_name[:config.FILENAME_MAX_LENGTH]
+            # 清理文件名中的非法字符和控制字符
+            safe_name = config.sanitize_filename(episode_name)
             # yt-dlp输出模板，使用%(ext)s让yt-dlp自动选择扩展名
             output_template = str(storage_path / f"{safe_name}.%(ext)s")
             
