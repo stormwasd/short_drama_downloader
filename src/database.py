@@ -76,6 +76,12 @@ class Database:
         except sqlite3.OperationalError:
             pass  # 字段已存在
         
+        # 为episodes表添加retry_count字段（用于跟踪重试次数）
+        try:
+            cursor.execute("ALTER TABLE episodes ADD COLUMN retry_count INTEGER DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass  # 字段已存在
+        
         # 剧集表
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS episodes (
@@ -221,17 +227,83 @@ class Database:
     
     def update_episode_status(self, episode_id: int, status: str, 
                              progress: float = 0.0, error_message: str = None,
-                             storage_path: str = None):
-        """更新剧集状态"""
+                             storage_path: str = None, retry_count: int = None):
+        """更新剧集状态
+        
+        Args:
+            episode_id: 剧集ID
+            status: 状态
+            progress: 进度（0.0-100.0）
+            error_message: 错误消息
+            storage_path: 存储路径
+            retry_count: 重试次数（如果为None，则保持原值；如果为整数，则更新）
+        """
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        if retry_count is not None:
+            # 如果指定了retry_count，则更新它
+            cursor.execute("""
+                UPDATE episodes 
+                SET status = ?, progress = ?, error_message = ?, 
+                    storage_path = ?, retry_count = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+            """, (status, progress, error_message, storage_path, retry_count, episode_id))
+        else:
+            # 如果不指定retry_count，保持原值
+            cursor.execute("""
+                UPDATE episodes 
+                SET status = ?, progress = ?, error_message = ?, 
+                    storage_path = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+            """, (status, progress, error_message, storage_path, episode_id))
+        
+        conn.commit()
+        conn.close()
+    
+    def increment_episode_retry_count(self, episode_id: int) -> int:
+        """增加剧集的重试次数并返回新的重试次数
+        
+        Args:
+            episode_id: 剧集ID
+            
+        Returns:
+            新的重试次数
+        """
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        # 先获取当前重试次数
+        cursor.execute("SELECT retry_count FROM episodes WHERE id = ?", (episode_id,))
+        result = cursor.fetchone()
+        current_count = result[0] if result and result[0] is not None else 0
+        
+        # 增加重试次数
+        new_count = current_count + 1
+        cursor.execute("""
+            UPDATE episodes 
+            SET retry_count = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+        """, (new_count, episode_id))
+        
+        conn.commit()
+        conn.close()
+        return new_count
+    
+    def reset_episode_retry_count(self, episode_id: int):
+        """重置剧集的重试次数为0（下载成功时调用）
+        
+        Args:
+            episode_id: 剧集ID
+        """
         conn = self.get_connection()
         cursor = conn.cursor()
         
         cursor.execute("""
             UPDATE episodes 
-            SET status = ?, progress = ?, error_message = ?, 
-                storage_path = ?, updated_at = CURRENT_TIMESTAMP
+            SET retry_count = 0, updated_at = CURRENT_TIMESTAMP
             WHERE id = ?
-        """, (status, progress, error_message, storage_path, episode_id))
+        """, (episode_id,))
         
         conn.commit()
         conn.close()

@@ -89,7 +89,10 @@ class DownloadManager:
         logger.info("下载管理器已停止")
     
     def add_episode(self, episode_id: int):
-        """添加剧集到下载队列"""
+        """添加剧集到下载队列
+        
+        对于 error 状态的剧集，会检查重试次数和时间间隔，确保不会立即重试
+        """
         with self.lock:
             if episode_id in self.processing_episodes:
                 return  # 已经在队列中或正在处理
@@ -99,23 +102,99 @@ class DownloadManager:
             logger.warning(f"剧集 {episode_id} 不存在")
             return
         
-        if episode['status'] in ['pending', 'error']:
+        status = episode.get('status')
+        
+        # pending 状态的剧集直接添加
+        if status == 'pending':
             with self.lock:
                 if episode_id not in self.processing_episodes:
                     self.processing_episodes.add(episode_id)
                     self.download_queue.put(episode_id)
                     logger.info(f"剧集 {episode_id} 已添加到下载队列")
+            return
+        
+        # error 状态的剧集需要检查重试次数和时间间隔
+        if status == 'error':
+            from datetime import datetime, timedelta
+            
+            episode_num = episode.get('episode_num', 'Unknown')
+            retry_count = episode.get('retry_count', 0) or 0
+            max_retry_count = config.MAX_RETRY_COUNT
+            retry_delay_seconds = config.RETRY_DELAY_SECONDS
+            
+            # 检查重试次数是否超过限制
+            if retry_count >= max_retry_count:
+                logger.debug(
+                    f"剧集 {episode_id} (Episode {episode_num}) 已达到最大重试次数 "
+                    f"({retry_count}/{max_retry_count})，不再添加到队列"
+                )
+                return
+            
+            # 检查时间间隔
+            updated_at = episode.get('updated_at')
+            if updated_at:
+                try:
+                    # 解析更新时间
+                    if isinstance(updated_at, str):
+                        try:
+                            updated_time = datetime.strptime(updated_at, '%Y-%m-%d %H:%M:%S')
+                        except ValueError:
+                            try:
+                                updated_time = datetime.strptime(updated_at, '%Y-%m-%d %H:%M:%S.%f')
+                            except ValueError:
+                                logger.warning(f"无法解析剧集 {episode_id} 的更新时间格式: {updated_at}")
+                                # 时间解析失败，不重试（避免立即重试）
+                                return
+                    else:
+                        updated_time = updated_at
+                    
+                    # 计算时间差
+                    time_diff = datetime.now() - updated_time
+                    if time_diff.total_seconds() < retry_delay_seconds:
+                        logger.debug(
+                            f"剧集 {episode_id} (Episode {episode_num}) 失败时间过短 "
+                            f"({time_diff.total_seconds():.1f} 秒 < {retry_delay_seconds} 秒)，暂不重试"
+                        )
+                        return
+                except Exception as e:
+                    logger.warning(f"检查剧集 {episode_id} 的重试时间间隔时出错: {e}，暂不重试")
+                    return
+            else:
+                # 如果没有更新时间，不重试（避免立即重试）
+                logger.debug(f"剧集 {episode_id} (Episode {episode_num}) 没有更新时间，暂不重试")
+                return
+            
+            # 通过所有检查，可以重试
+            with self.lock:
+                if episode_id not in self.processing_episodes:
+                    self.processing_episodes.add(episode_id)
+                    self.download_queue.put(episode_id)
+                    logger.info(
+                        f"重试下载失败的剧集 {episode_id} (Episode {episode_num}), "
+                        f"重试次数: {retry_count + 1}/{max_retry_count}"
+                    )
     
     def _process_queue(self):
         """处理下载队列（定期检查新的待下载剧集）"""
         import time
+        from datetime import datetime, timedelta
+        
         while self.running:
             try:
-                # 获取待下载的剧集
+                # 获取待下载的剧集（pending状态）
                 pending_episodes = self.db.get_episodes_by_status('pending')
                 
                 for episode in pending_episodes:
                     if episode['status'] != 'deleted':
+                        self.add_episode(episode['id'])
+                
+                # 获取失败状态的剧集（error状态），尝试添加到队列
+                # 注意：add_episode 方法内部已经检查了重试次数和时间间隔，这里只需要调用即可
+                error_episodes = self.db.get_episodes_by_status('error')
+                
+                for episode in error_episodes:
+                    if episode['status'] != 'deleted':
+                        # add_episode 内部会检查重试次数和时间间隔
                         self.add_episode(episode['id'])
                 
                 # 等待一段时间后再次检查
@@ -203,19 +282,28 @@ class DownloadManager:
                             break
                     
                     if actual_file:
+                        # 下载成功，重置重试次数
+                        self.db.reset_episode_retry_count(ep_id)
                         self.db.update_episode_status(
                             ep_id, 'completed', 100.0, 
                             storage_path=str(actual_file)
                         )
                     else:
                         # 如果找不到文件，仍然标记为完成，但记录警告
+                        # 重置重试次数（因为下载过程已完成）
+                        self.db.reset_episode_retry_count(ep_id)
                         self.db.update_episode_status(
                             ep_id, 'completed', 100.0,
                             storage_path=str(storage_path / f"{safe_name}.mp4")
                         )
                 elif status == 'error':
+                    # 下载失败，增加重试次数
+                    retry_count = self.db.increment_episode_retry_count(ep_id)
                     self.db.update_episode_status(
                         ep_id, 'error', 0.0, error_msg
+                    )
+                    logger.warning(
+                        f"剧集 {ep_id} 下载失败，重试次数: {retry_count}/{config.MAX_RETRY_COUNT}"
                     )
                 else:
                     self.db.update_episode_status(ep_id, 'downloading', progress)
@@ -248,8 +336,12 @@ class DownloadManager:
                     break
             
             if actual_file:
+                # 下载成功，确保重试次数已重置（progress_hook中已处理，这里作为双重保险）
+                self.db.reset_episode_retry_count(episode_id)
                 logger.info(f"剧集 {episode_id} 下载完成: {actual_file}")
             else:
+                # 即使找不到文件，也重置重试次数（因为下载过程已完成）
+                self.db.reset_episode_retry_count(episode_id)
                 logger.warning(f"剧集 {episode_id} 下载完成，但无法找到文件")
             
             with self.lock:
@@ -258,7 +350,17 @@ class DownloadManager:
         except Exception as e:
             error_msg = str(e)
             logger.error(f"下载剧集 {episode_id} 失败: {error_msg}")
+            
+            # 增加重试次数
+            retry_count = self.db.increment_episode_retry_count(episode_id)
             self.db.update_episode_status(episode_id, 'error', 0.0, error_msg)
+            
+            # 检查是否达到最大重试次数
+            if retry_count >= config.MAX_RETRY_COUNT:
+                logger.error(
+                    f"剧集 {episode_id} (Episode {episode.get('episode_num', 'Unknown')}) "
+                    f"已达到最大重试次数 ({retry_count}/{config.MAX_RETRY_COUNT})，将不再自动重试"
+                )
             
             if self.progress_callback:
                 self.progress_callback(episode_id, 0.0, 'error', error_msg)

@@ -18,6 +18,13 @@ class Config:
     # 工作线程超时（秒）
     WORKER_TIMEOUT: int = 1
     
+    # 最大重试次数（超过此次数后不再重试）
+    MAX_RETRY_COUNT: int = 10
+    
+    # 重试延迟时间（秒，失败后等待多长时间再重试）
+    # 对于临时网络错误，30-60秒通常足够；对于永久性错误（如403），会通过重试次数限制避免无限重试
+    RETRY_DELAY_SECONDS: int = 5
+    
     # ========== API配置 ==========
     # API请求超时时间（秒）
     API_TIMEOUT: int = 30
@@ -62,7 +69,7 @@ class Config:
     
     # ========== 版本配置 ==========
     # 版本号
-    VERSION: str = "1.0.1"
+    VERSION: str = "1.0.2"
     
     @classmethod
     def get_all_config(cls) -> Dict[str, Any]:
@@ -71,6 +78,8 @@ class Config:
             'MAX_CONCURRENT_DOWNLOADS': cls.MAX_CONCURRENT_DOWNLOADS,
             'QUEUE_CHECK_INTERVAL': cls.QUEUE_CHECK_INTERVAL,
             'WORKER_TIMEOUT': cls.WORKER_TIMEOUT,
+            'MAX_RETRY_COUNT': cls.MAX_RETRY_COUNT,
+            'RETRY_DELAY_SECONDS': cls.RETRY_DELAY_SECONDS,
             'API_TIMEOUT': cls.API_TIMEOUT,
             'UI_REFRESH_INTERVAL': cls.UI_REFRESH_INTERVAL,
             'WINDOW_X': cls.WINDOW_X,

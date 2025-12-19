@@ -450,14 +450,143 @@ class MainWindow(QMainWindow):
                     # 封面下载失败不影响任务创建
             
             # 将剧集添加到下载队列
+            # 使用改进的匹配逻辑，优先使用 episode_num 匹配，URL 作为辅助验证
             task_episodes = self.db.get_task_episodes(task_id)
+            added_count = 0
+            failed_count = 0
+            failed_episodes = []
+            
+            logger.info(f"开始将 {len(episodes)} 个剧集添加到下载队列（任务ID: {task_id}）")
+            
             for episode in episodes:
-                # 通过数据库查询获取episode_id
-                for ep in task_episodes:
-                    if (ep['episode_num'] == episode['episode_num'] and 
-                        ep['episode_url'] == episode['episode_url']):
-                        self.download_manager.add_episode(ep['id'])
-                        break
+                episode_num = episode.get('episode_num')
+                episode_url = episode.get('episode_url', '')
+                matched = False
+                matched_ep = None
+                
+                try:
+                    # 优先使用 episode_num 匹配（更可靠）
+                    for ep in task_episodes:
+                        if ep['episode_num'] == episode_num:
+                            # episode_num 匹配，检查 URL（作为辅助验证）
+                            ep_url = ep.get('episode_url', '')
+                            if ep_url == episode_url:
+                                # 完全匹配（episode_num + URL）
+                                matched_ep = ep
+                                matched = True
+                                logger.debug(
+                                    f"剧集匹配成功（完全匹配）: Episode {episode_num}, "
+                                    f"episode_id={ep['id']}, URL匹配"
+                                )
+                                break
+                            elif not matched_ep:
+                                # episode_num 匹配但 URL 不匹配，先记录（作为备选）
+                                matched_ep = ep
+                                logger.warning(
+                                    f"剧集匹配（部分匹配）: Episode {episode_num}, "
+                                    f"episode_id={ep['id']}, URL不匹配 "
+                                    f"(API: {episode_url[:50]}... vs DB: {ep_url[:50]}...)"
+                                )
+                    
+                    # 如果找到了匹配的剧集（即使URL不完全匹配，也使用episode_num匹配的结果）
+                    if matched_ep:
+                        try:
+                            self.download_manager.add_episode(matched_ep['id'])
+                            added_count += 1
+                            if not matched:
+                                # URL不匹配但episode_num匹配，记录警告但继续
+                                logger.warning(
+                                    f"剧集 Episode {episode_num} (episode_id={matched_ep['id']}) "
+                                    f"已添加到队列，但URL不完全匹配"
+                                )
+                            else:
+                                logger.debug(
+                                    f"剧集 Episode {episode_num} (episode_id={matched_ep['id']}) 已添加到队列"
+                                )
+                        except Exception as e:
+                            logger.error(
+                                f"添加剧集 Episode {episode_num} (episode_id={matched_ep['id']}) 到队列时出错: {e}"
+                            )
+                            failed_count += 1
+                            failed_episodes.append({
+                                'episode_num': episode_num,
+                                'episode_name': episode.get('episode_name', f'Episode {episode_num}'),
+                                'reason': f'添加到队列失败: {str(e)}'
+                            })
+                    else:
+                        # 没有找到匹配的剧集
+                        logger.error(
+                            f"未找到匹配的剧集: Episode {episode_num}, "
+                            f"episode_url={episode_url[:50]}..."
+                        )
+                        failed_count += 1
+                        failed_episodes.append({
+                            'episode_num': episode_num,
+                            'episode_name': episode.get('episode_name', f'Episode {episode_num}'),
+                            'reason': '未在数据库中找到匹配的剧集记录'
+                        })
+                
+                except Exception as e:
+                    logger.error(
+                        f"处理剧集 Episode {episode_num} 时发生异常: {e}",
+                        exc_info=True
+                    )
+                    failed_count += 1
+                    failed_episodes.append({
+                        'episode_num': episode_num,
+                        'episode_name': episode.get('episode_name', f'Episode {episode_num}'),
+                        'reason': f'处理异常: {str(e)}'
+                    })
+            
+            # 记录匹配结果
+            logger.info(
+                f"剧集匹配完成: 成功添加 {added_count} 个，失败 {failed_count} 个，"
+                f"总计 {len(episodes)} 个剧集"
+            )
+            
+            # 兜底检查：确保所有数据库中的剧集都被检查
+            if failed_count > 0:
+                logger.warning(f"有 {failed_count} 个剧集未能添加到下载队列:")
+                for failed_ep in failed_episodes:
+                    logger.warning(
+                        f"  - Episode {failed_ep['episode_num']} ({failed_ep['episode_name']}): "
+                        f"{failed_ep['reason']}"
+                    )
+                
+                # 尝试通过 episode_num 直接查找并添加（兜底机制）
+                logger.info("执行兜底检查：尝试通过 episode_num 直接匹配...")
+                for failed_ep in failed_episodes:
+                    episode_num = failed_ep['episode_num']
+                    for ep in task_episodes:
+                        if ep['episode_num'] == episode_num:
+                            try:
+                                # 检查是否已经在队列中
+                                episode_status = ep.get('status', '')
+                                if episode_status in ['pending', 'error']:
+                                    self.download_manager.add_episode(ep['id'])
+                                    logger.info(
+                                        f"兜底检查成功: Episode {episode_num} "
+                                        f"(episode_id={ep['id']}) 已通过兜底机制添加到队列"
+                                    )
+                                    added_count += 1
+                                    failed_count -= 1
+                                    break
+                                else:
+                                    logger.debug(
+                                        f"兜底检查跳过: Episode {episode_num} "
+                                        f"(episode_id={ep['id']}) 状态为 {episode_status}"
+                                    )
+                            except Exception as e:
+                                logger.error(
+                                    f"兜底检查时添加剧集 Episode {episode_num} 失败: {e}"
+                                )
+                            break
+                
+                if failed_count > 0:
+                    logger.error(
+                        f"兜底检查后仍有 {failed_count} 个剧集未能添加到下载队列，"
+                        f"请检查数据库和日志"
+                    )
             
             # 显示成功消息（包含封面下载结果）
             if cover_count > 0:
