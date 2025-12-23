@@ -19,6 +19,48 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
+def cleanup_temp_files(storage_path: Path, episode_name: str):
+    """
+    清理下载过程中产生的临时文件（.part文件）
+    
+    yt-dlp在下载HLS视频时会创建临时片段文件，格式包括：
+    - filename.part
+    - filename.part-FragX.part
+    - filename.extension.part
+    - filename.extension.part-FragX.part
+    
+    Args:
+        storage_path: 存储目录路径
+        episode_name: 剧集名称（用于匹配临时文件，不包含扩展名）
+    """
+    try:
+        if not storage_path.exists() or not storage_path.is_dir():
+            return
+        
+        cleaned_count = 0
+        for file_path in storage_path.iterdir():
+            if not file_path.is_file():
+                continue
+            
+            file_name = file_path.name
+            
+            # 检查是否是临时文件（包含.part）
+            # 并且文件名以剧集名称开头（匹配当前下载的剧集）
+            if '.part' in file_name and file_name.startswith(episode_name):
+                try:
+                    file_path.unlink()
+                    cleaned_count += 1
+                    logger.debug(f"已清理临时文件: {file_path}")
+                except Exception as e:
+                    logger.warning(f"清理临时文件失败 {file_path}: {e}")
+        
+        if cleaned_count > 0:
+            logger.info(f"已清理 {cleaned_count} 个临时文件 (剧集: {episode_name})")
+    
+    except Exception as e:
+        logger.warning(f"清理临时文件时出错: {e}")
+
+
 class DownloadProgressHook:
     """yt-dlp进度钩子"""
     
@@ -344,6 +386,9 @@ class DownloadManager:
                 self.db.reset_episode_retry_count(episode_id)
                 logger.warning(f"剧集 {episode_id} 下载完成，但无法找到文件")
             
+            # 清理下载过程中产生的临时文件
+            cleanup_temp_files(storage_path, safe_name)
+            
             with self.lock:
                 self.processing_episodes.discard(episode_id)
         
@@ -361,6 +406,33 @@ class DownloadManager:
                     f"剧集 {episode_id} (Episode {episode.get('episode_num', 'Unknown')}) "
                     f"已达到最大重试次数 ({retry_count}/{config.MAX_RETRY_COUNT})，将不再自动重试"
                 )
+            
+            # 清理下载过程中产生的临时文件（即使下载失败也要清理）
+            try:
+                # 获取存储路径和文件名用于清理
+                task_episodes = self.db.get_task_episodes(episode.get('task_id', 0))
+                task_info = None
+                for ep in task_episodes:
+                    if ep['id'] == episode_id:
+                        tasks = self.db.get_all_tasks()
+                        for task in tasks:
+                            if task['id'] == episode.get('task_id', 0):
+                                task_info = task
+                                break
+                        break
+                
+                if task_info:
+                    base_storage_path = Path(task_info['storage_path'])
+                    drama_name = task_info.get('drama_name', 'Unknown')
+                    safe_drama_name = config.sanitize_filename(drama_name)
+                    storage_path = base_storage_path / safe_drama_name
+                    
+                    episode_name = episode.get('episode_name', f"Episode_{episode.get('episode_num', 'Unknown')}")
+                    safe_name = config.sanitize_filename(episode_name)
+                    
+                    cleanup_temp_files(storage_path, safe_name)
+            except Exception as cleanup_error:
+                logger.warning(f"清理临时文件时出错: {cleanup_error}")
             
             if self.progress_callback:
                 self.progress_callback(episode_id, 0.0, 'error', error_msg)

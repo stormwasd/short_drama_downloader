@@ -69,7 +69,7 @@ class Config:
     
     # ========== 版本配置 ==========
     # 版本号
-    VERSION: str = "1.0.2"
+    VERSION: str = "1.0.3"
     
     @classmethod
     def get_all_config(cls) -> Dict[str, Any]:
