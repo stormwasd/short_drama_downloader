@@ -112,6 +112,10 @@ class DownloadManager:
         if self.running:
             return
         
+        # 启动时恢复不一致的状态
+        # 这是为了处理程序异常关闭时，文件已下载但状态未更新的情况
+        self._recover_inconsistent_states()
+        
         self.running = True
         # 启动工作线程
         for i in range(self.max_concurrent):
@@ -124,6 +128,81 @@ class DownloadManager:
         queue_thread.start()
         
         logger.info("下载管理器已启动")
+    
+    def _recover_inconsistent_states(self):
+        """恢复不一致的状态
+        
+        检查所有 downloading 状态的剧集：
+        1. 如果文件已存在 -> 更新状态为 completed
+        2. 如果文件不存在 -> 重置状态为 pending（让其重新下载）
+        
+        这解决了程序异常关闭时状态未正确更新的问题
+        """
+        try:
+            downloading_episodes = self.db.get_episodes_by_status('downloading')
+            if not downloading_episodes:
+                return
+            
+            logger.info(f"启动恢复检查: 发现 {len(downloading_episodes)} 个状态为 downloading 的剧集")
+            
+            # 获取所有任务信息用于构建文件路径
+            all_tasks = {task['id']: task for task in self.db.get_all_tasks()}
+            
+            recovered_completed = 0
+            recovered_pending = 0
+            
+            for episode in downloading_episodes:
+                episode_id = episode['id']
+                task_id = episode.get('task_id')
+                task_info = all_tasks.get(task_id)
+                
+                if not task_info:
+                    # 任务不存在，重置为pending
+                    logger.warning(f"剧集 {episode_id} 对应的任务 {task_id} 不存在，重置为 pending")
+                    self.db.update_episode_status(episode_id, 'pending', 0.0)
+                    recovered_pending += 1
+                    continue
+                
+                # 构建文件路径
+                base_storage_path = Path(task_info['storage_path'])
+                drama_name = task_info.get('drama_name', 'Unknown')
+                safe_drama_name = config.sanitize_filename(drama_name)
+                storage_path = base_storage_path / safe_drama_name
+                
+                episode_name = episode.get('episode_name', f"Episode_{episode.get('episode_num', 'Unknown')}")
+                safe_name = config.sanitize_filename(episode_name)
+                
+                # 检查文件是否存在
+                actual_file = None
+                for ext in config.VIDEO_EXTENSIONS:
+                    test_file = storage_path / f"{safe_name}.{ext}"
+                    if test_file.exists():
+                        actual_file = test_file
+                        break
+                
+                if actual_file:
+                    # 文件存在，更新状态为 completed
+                    logger.info(f"剧集 {episode_id} ({episode_name}) 文件已存在，状态修正为 completed: {actual_file}")
+                    self.db.update_episode_status(
+                        episode_id, 'completed', 100.0,
+                        storage_path=str(actual_file)
+                    )
+                    self.db.reset_episode_retry_count(episode_id)
+                    recovered_completed += 1
+                else:
+                    # 文件不存在，重置为 pending 让其重新下载
+                    logger.info(f"剧集 {episode_id} ({episode_name}) 文件不存在，状态重置为 pending")
+                    self.db.update_episode_status(episode_id, 'pending', 0.0)
+                    recovered_pending += 1
+            
+            if recovered_completed > 0 or recovered_pending > 0:
+                logger.info(
+                    f"启动恢复完成: {recovered_completed} 个剧集标记为已完成，"
+                    f"{recovered_pending} 个剧集重置为待下载"
+                )
+        
+        except Exception as e:
+            logger.error(f"启动恢复检查时出错: {e}")
     
     def stop(self):
         """停止下载管理器"""
@@ -378,13 +457,30 @@ class DownloadManager:
                     break
             
             if actual_file:
-                # 下载成功，确保重试次数已重置（progress_hook中已处理，这里作为双重保险）
+                # 下载成功，重置重试次数
                 self.db.reset_episode_retry_count(episode_id)
+                
+                # 关键修复：确保状态被更新为completed
+                # yt-dlp的progress_hooks回调可能在某些情况下（如HLS流、网络波动等）
+                # 没有正确触发finished状态，导致数据库状态卡在downloading
+                # 这里作为"双重保险"，强制确保状态被正确更新
+                current_episode = self.db.get_episode_by_id(episode_id)
+                if current_episode and current_episode.get('status') != 'completed':
+                    logger.info(f"剧集 {episode_id} 状态修正: {current_episode.get('status')} -> completed")
+                    self.db.update_episode_status(
+                        episode_id, 'completed', 100.0,
+                        storage_path=str(actual_file)
+                    )
+                    # 触发UI回调
+                    if self.progress_callback:
+                        self.progress_callback(episode_id, 100.0, 'completed', None)
+                
                 logger.info(f"剧集 {episode_id} 下载完成: {actual_file}")
             else:
-                # 即使找不到文件，也重置重试次数（因为下载过程已完成）
+                # 文件不存在，检查下载过程是否真的完成了
+                # 如果ydl.download()没有抛出异常但文件不存在，可能是后处理问题
                 self.db.reset_episode_retry_count(episode_id)
-                logger.warning(f"剧集 {episode_id} 下载完成，但无法找到文件")
+                logger.warning(f"剧集 {episode_id} 下载过程完成，但无法找到文件，保持当前状态")
             
             # 清理下载过程中产生的临时文件
             cleanup_temp_files(storage_path, safe_name)
